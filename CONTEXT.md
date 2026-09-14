@@ -66,7 +66,7 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Every blocker is line-scoped** — No blocker refuses a whole request. A failure confined to one line drops that line and the survivors continue; a request ends rejected only when every one of its lines has dropped. Four agents arrived at this independently, each on the same argument — declining an order for a failure that touched one line of it is a worse answer than serving the rest — so the business has no notion of a fatal blocker at all.
 
-**One blocker per line** — A requested line raises at most one blocker, and resolution is judged before units. A line that names something we do not sell *and* counts it in a unit we cannot price has failed once, not twice, and the audit trail must not count it as two rejections.
+**One blocker per line** — A requested line raises at most one blocker, and resolution is judged before units. A line that names something we do not sell *and* counts it in a unit we cannot price has failed once, not twice, and the audit trail must not count it as two rejections. Across the bounded retry the *last* blocker is the one the customer hears: a line short of stock, restocked, then refused on the delivery promise is told about the promise, because by then we are no longer out of it. Every blocker raised is still kept in the trail; precedence governs what is spoken, not what is recorded.
 
 **Commitment** — The moment a line stops being an offer and becomes money moving. Everything a domain agent verifies on a line is verified *before* any line is committed, because nothing here can be undone.
 
@@ -113,6 +113,14 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 **Restock** — A purchase of stock from the supplier: money out, stock in. Booked on the day it is paid for, so the stock is on our books immediately; the supplier's lead time is carried forward into the delivery date we promise the customer, never into when the stock appears.
 
 **Cash guard** — Replenishment's refusal to spend more than the cash on hand. It applies **per item**: one item being unaffordable never withholds another we could pay for. Within a single item it is all-or-nothing — a shortfall is never part-filled, because half of what a line needs is money out with the line still declined. Revenue from the order being served does not count as cash on hand; the business cannot spend what it has not been paid.
+
+## Delivery
+
+**Delivery promise** — The date the business commits to putting goods in the customer's hands. A property of *where the goods are*, not of how many were asked for: what we hold is promised the day the request arrives, and what we must buy in is promised the day it reaches us. The business never promises a customer a date earlier than its own supplier gives it.
+
+**Supplier lead time** — How long the supplier takes to reach *us*, sized by the quantity we are buying. An input to a purchase, and only indirectly to a sale — it reaches the customer solely through the delivery promise on a line we had to buy in. Applying it to goods already on the shelf would refuse orders we could fill from stock on hand.
+
+**Unmeetable deadline** — A delivery promise later than the date the customer needs the goods by. Reachable only on a line that went through replenishment, since a line filled from stock is promised the day it is asked for. It declines that line and no other, and — arising after money has moved — is spoken as prose naming the date we could have met, never as a suspension.
 
 ## Outcomes
 

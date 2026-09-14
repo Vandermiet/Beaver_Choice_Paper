@@ -10,7 +10,9 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **The orchestrator never acts** — The rule that the orchestrator performs no operation on a system of record. It constrains what the orchestrator may touch; the audit trail is outside that boundary, so the orchestrator owns it. Distinct from *single-level orchestration*, which constrains the domain agents' delegation.
 
-**Domain agent** — One of the four agents that owns a single domain and its tools: inventory, quoting, sales, replenishment. A domain agent answers about its own domain and reports blockers in its own domain. It never delegates to another agent.
+**Domain agent** — One of the four agents that owns a single domain: inventory, quoting, sales, replenishment. A domain agent answers about its own domain and reports blockers in its own domain. It never delegates to another agent.
+
+**Ownership** — What a domain agent owns is a set of *decisions*, not a set of tables. Two agents may read the same system of record while asking different questions of it, and that is not an overlap; two agents making the same decision is. Non-overlap is judged on the question answered, never on the data touched.
 
 **Single-level orchestration** — The rule that all delegation is one level deep. Every sequence of steps is planned, executed and orchestrated by the orchestrator; a domain agent never orchestrates another agent. Distinct from *the orchestrator never acts*, which constrains the orchestrator's tool use; this constrains the domain agents' delegation.
 
@@ -20,7 +22,15 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Requested line** — A single thing the customer asked for, in the customer's own words, with the quantity and unit as they stated them. Catalogue-blind: a requested line may name something that does not exist, or a unit the business does not sell in.
 
-**Resolved item** — A requested line matched to an exact catalogue item name. Resolution is inventory's work; a requested line that cannot be resolved carries no resolved item and raises a blocker instead.
+**Resolved item** — A requested line matched to an exact name in the carried catalogue. Resolution is inventory's work; a requested line that cannot be resolved carries no resolved item and raises a blocker instead.
+
+## The catalogue
+
+**Product universe** — Every item the business could conceivably sell, with its category and unit price. Reference data, not a statement of what is for sale.
+
+**Carried catalogue** — The items the business actually sells: the subset of the product universe the company stocks, each with a unit price and a reorder threshold. This is what a requested line resolves against, and the authority on whether something is on offer at all. An item can be in the product universe and not in the carried catalogue, and that is indistinguishable, to a customer, from not existing.
+
+**Stocked** — Carried *and* holding positive stock as of a date. A carried item that is stocked out is still on offer; an item that is not carried never was. The two are different answers and never collapse into one.
 
 ## Contracts
 
@@ -40,13 +50,43 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Severity** — *Fatal* (nothing in the request can be served) or *partial* (one line drops, the rest continue). A property of the code, not a free choice of the agent raising it.
 
-**Revisable blocker** — A blocker the customer could plausibly clear by amending their order — an ambiguous item, an unrecognised unit, an unmeetable deadline. Contrasted with a flat refusal, which no amendment fixes (we do not carry it) or which the customer is never told about (insufficient cash). Revisability is a property of the code.
+**Commitment** — The moment a line stops being an offer and becomes money moving. Everything a domain agent verifies on a line is verified *before* any line is committed, because nothing here can be undone.
+
+**Revisable blocker** — A blocker the customer could plausibly clear by amending their order — an ambiguous item, an unrecognised unit, an unmeetable deadline. Contrasted with a flat refusal, which no amendment fixes (we do not carry it) or which the customer is never told about (insufficient cash). Revisability is a property of the code. It does **not** imply suspension: a revisable blocker raised after commitment is spoken as prose — the reply names the alternative we could have met — because a flow can only suspend before money moves.
+
+## Registries
+
+**Registry** — A store of a business event as it happened: quotes issued, transactions written. A registry is a *record*, never a channel — it is written by exactly one agent through exactly one tool, and nothing reads it back to learn something another agent already said in the envelope.
+
+**Quote registry** — The record of every priced line the business offered, written at quote time, before anyone rules on whether it can be delivered. Separate from the transaction registry even though the two hold near-identical facts: a quote is an offer, a transaction is money moving, and the gap between them is the business's rejection history.
+
+**Transaction registry** — The record of money and stock actually moving: the `transactions` table, the authority that cash and inventory are read from.
+
+**Quote-as-order** — The deliberate collapse of quoting and ordering into one act, because the simulation has no channel through which a customer could accept. A quote request is treated as a firm order: it is priced, committed and written in one turn.
+
+## Replenishment
+
+**Reorder threshold** — The per-item stock floor recorded in the carried catalogue. It is a *tripwire for sizing*, not a trigger: nothing watches it, and falling below it starts nothing on its own.
+
+**Reorder trigger** — The only thing that sets replenishment in motion: a customer order that cannot be served from stock on hand. There is no periodic sweep. Every purchase this business makes is traceable to a customer who asked for something we did not have.
+
+**Shortfall** — The units by which a requested line exceeds the stock held for that item. What the restock must at minimum cover.
+
+**Target stock level** — What replenishment restocks *to*, as distinct from what the order needs: the shortfall covered, and stock left back at the reorder threshold once the order has shipped. A restock serves the customer in front of us and rebuilds the floor in the same purchase. Measured *after* the sale — measured before, the order would immediately eat the floor we just bought.
+
+**Supplier cost ratio** — The fraction of an item's catalogue price the business pays its supplier for it. Varies by product rather than by purchase: the supplier holds a standing rate per item, so the same item always costs the same to buy, and different items differ. The provided data contains no supplier price at all, so this ratio is the business's own invention, introduced to make the simulation's cash behave like a trading business rather than one that buys at its own shelf price.
+
+**No margin is claimed** — The business reports what cash actually moved and never asserts a profit figure. Stock acquired before the supplier cost ratio existed and stock bought under it sit in the same bin at different costs, so any single margin number would be a guess dressed as an accounting fact.
+
+**Restock** — A purchase of stock from the supplier: money out, stock in. Booked on the day it is paid for, so the stock is on our books immediately; the supplier's lead time is carried forward into the delivery date we promise the customer, never into when the stock appears.
+
+**Cash guard** — Replenishment's refusal to spend more than the cash on hand. It applies **per item**: one item being unaffordable never withholds another we could pay for. Within a single item it is all-or-nothing — a shortfall is never part-filled, because half of what a line needs is money out with the line still declined. Revenue from the order being served does not count as cash on hand; the business cannot spend what it has not been paid.
 
 ## Outcomes
 
 **Outcome** — How a request ended: fulfilled, partially fulfilled, rejected, or pending customer revision.
 
-**Pending customer revision** — An outcome, not a state of waiting. The request cannot proceed until the customer amends it, so the flow is suspended and the reply asks the revision questions. Nothing in a harness run resumes it; the customer has no channel to answer.
+**Pending customer revision** — An outcome, not a state of waiting. The request cannot proceed until the customer amends it, so the flow is suspended and the reply asks the revision questions. Reachable only before any line is committed — once money has moved, the request ends in an outcome rather than a question. Nothing in a harness run resumes it; the customer has no channel to answer.
 
 **Revision query** — One question put to the customer, arising from one revisable blocker.
 

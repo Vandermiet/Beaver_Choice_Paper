@@ -78,6 +78,16 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Quote-as-order** — The deliberate collapse of quoting and ordering into one act, because the simulation has no channel through which a customer could accept. A quote request is treated as a firm order: it is priced, committed and written in one turn.
 
+## Pricing
+
+**The ladder** — The fixed schedule of volume discounts the business offers. Deterministic and public in the sense that the same line always earns the same band: the price is never a judgement the model makes, only an arithmetic the ladder produces. It exists so that "why this price?" has an answer that does not begin with "the model decided".
+
+**Discount band** — The rung of the ladder a line lands on, measured in *units on that line* and never in money. Prices across the catalogue span fiftyfold, so a discount earned by spend would reward buying expensive things rather than buying many, which is not what a bulk discount is for. Bands apply per line, independently, and never compound.
+
+**Precedent** — Past quotes retrieved from the seeded history, consulted *after* the price is computed and never permitted to move it. The historical totals do not reconcile with the catalogue, so they are evidence of how the business talks about its prices, not of what the prices were. Finding none is a legitimate outcome and is recorded as one.
+
+**Quote registry row** — One priced line as it was offered: the item, the units, the price, and the band that earned it. Written before anyone rules on whether the line can be delivered, so the rows that never become transactions are the business's rejection history rather than a gap in its records.
+
 ## Replenishment
 
 **Reorder threshold** — The per-item stock floor recorded in the carried catalogue. It is a *tripwire for sizing*, not a trigger: nothing watches it, and falling below it starts nothing on its own.

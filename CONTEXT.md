@@ -98,7 +98,7 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Reorder threshold** — The per-item stock floor recorded in the carried catalogue. It is a *tripwire for sizing*, not a trigger: nothing watches it, and falling below it starts nothing on its own.
 
-**Reorder trigger** — The only thing that sets replenishment in motion: a customer order that cannot be served from stock on hand. There is no periodic sweep. Every purchase this business makes is traceable to a customer who asked for something we did not have.
+**Reorder trigger** — The only thing that sets replenishment in motion: a line the business has actually refused to commit for want of stock. There is no periodic sweep, and an observation that stock is short is not itself a trigger — the purse opens on the refusal at commitment, not on the survey that saw it coming. Every purchase this business makes is traceable to a customer who asked for something we did not have.
 
 **Shortfall** — The units by which a requested line exceeds the stock held for that item. What the restock must at minimum cover. Inventory alone computes it; replenishment consumes it and never re-derives it from a stock reading of its own, because that would be two agents answering the same question.
 
@@ -112,6 +112,8 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Restock** — A purchase of stock from the supplier: money out, stock in. Booked on the day it is paid for, so the stock is on our books immediately; the supplier's lead time is carried forward into the delivery date we promise the customer, never into when the stock appears.
 
+**Speculative restock** — A purchase of goods that cannot reach the customer who triggered it in time. The business does not make one: where the supplier's lead time runs past the date the customer needs the goods by, nothing is bought at all — not even the part of the order that would have rebuilt the floor. Buying the floor alone would be a purchase sized by the reorder threshold and by nothing else, which is the periodic sweep the business has ruled out, arriving under a customer's name.
+
 **Cash guard** — Replenishment's refusal to spend more than the cash on hand. It applies **per item**: one item being unaffordable never withholds another we could pay for. Within a single item it is all-or-nothing — a shortfall is never part-filled, because half of what a line needs is money out with the line still declined. Revenue from the order being served does not count as cash on hand; the business cannot spend what it has not been paid.
 
 ## Delivery
@@ -120,7 +122,7 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Supplier lead time** — How long the supplier takes to reach *us*, sized by the quantity we are buying. An input to a purchase, and only indirectly to a sale — it reaches the customer solely through the delivery promise on a line we had to buy in. Applying it to goods already on the shelf would refuse orders we could fill from stock on hand.
 
-**Unmeetable deadline** — A delivery promise later than the date the customer needs the goods by. Reachable only on a line that went through replenishment, since a line filled from stock is promised the day it is asked for. It declines that line and no other, and — arising after money has moved — is spoken as prose naming the date we could have met, never as a suspension.
+**Unmeetable deadline** — A delivery promise later than the date the customer needs the goods by. Reachable only on a line the business would have had to buy in, since a line filled from stock is promised the day it is asked for. It is judged by the buyer at the moment of buying, which is why the goods are never bought: the business learns that it cannot meet the date from the same lead time it would have paid for. It declines that line and no other, and — sibling lines on the same request having possibly already been committed — is spoken as prose naming the date we could have met, never as a suspension.
 
 ## Outcomes
 

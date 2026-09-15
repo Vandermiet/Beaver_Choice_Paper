@@ -702,8 +702,16 @@ def run_test_scenarios():
     print(f"Final Cash: ${final_report['cash_balance']:.2f}")
     print(f"Final Inventory: ${final_report['inventory_value']:.2f}")
 
-    # Save results
-    pd.DataFrame(results).to_csv("test_results.csv", index=False)
+    # Save results. Every run is archived under test_results/ with the ticket
+    # number as the suffix, so results from different tickets sit side by side:
+    # set BEAVER_TICKET=101 to write test_results/test_results_101.csv.
+    results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_results")
+    os.makedirs(results_dir, exist_ok=True)
+    ticket = os.environ.get("BEAVER_TICKET", "").strip()
+    suffix = f"_{ticket}" if ticket else ""
+    pd.DataFrame(results).to_csv(
+        os.path.join(results_dir, f"test_results{suffix}.csv"), index=False
+    )
     return results
 
 

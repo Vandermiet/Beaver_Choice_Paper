@@ -28,9 +28,12 @@ from beaver.quoting.models import (
 )
 from beaver.quoting.tools import (
     catalogue_price,
+    check_against_precedent,
     find_precedent,
     price_line,
     price_of,
+    quote_line_id,
+    quote_total,
     record_quote,
 )
 
@@ -111,17 +114,23 @@ async def build_quoting_response(
             )
             continue
 
-        quoted.append(
-            price_line(
-                line_id=line.line_id,
-                quote_line_id=f"{run_id}:{deps.request_id}:{line.line_id}",
-                item_name=line.item_name,
-                units=line.quantity,
-                unit_price=unit_price,
-            )
+        priced = price_line(
+            line_id=line.line_id,
+            quote_line_id=quote_line_id(run_id, deps.request_id, line.line_id),
+            item_name=line.item_name,
+            units=line.quantity,
+            unit_price=unit_price,
         )
+        quoted.append(priced)
+        # Retrieved after the price is fixed, and compared to it only to write
+        # a note. Precedent has no argument through which it could move one.
         precedents.append(
-            find_precedent(line.line_id, terms_by_line.get(line.line_id) or _terms_of(line))
+            check_against_precedent(
+                find_precedent(
+                    line.line_id, terms_by_line.get(line.line_id) or _terms_of(line)
+                ),
+                priced.line_total,
+            )
         )
 
     return QuotingResponse(
@@ -130,7 +139,7 @@ async def build_quoting_response(
         request_id=deps.request_id,
         customer=QuotingCustomerPayload(
             quoted_lines=quoted,
-            quote_total=round(sum(line.line_total for line in quoted), 2),
+            quote_total=quote_total(quoted),
         ),
         internal=QuotingInternalPayload(
             precedents=precedents,
@@ -164,6 +173,12 @@ def _one_per_line(lines: list[ResolvedLine]) -> list[ResolvedLine]:
     A model that reports one line twice would otherwise be quoted twice, and
     the second registry row would collide with the first on a primary key that
     is derived from the line id.
+
+    Args:
+        lines: The resolved lines as the model reported them.
+
+    Returns:
+        One line per `line_id`, in the order they arrived.
     """
     seen: dict[str, ResolvedLine] = {}
     for line in lines:

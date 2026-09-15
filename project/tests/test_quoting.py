@@ -9,6 +9,8 @@ the orchestrator makes. Both run on a `FunctionModel`, so no network and no key.
 """
 
 import json
+from inspect import signature
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -19,18 +21,20 @@ from sqlalchemy import text
 
 from beaver import orchestrator, starter
 from beaver.audit import AgentDeps
-from beaver.contract import AgentName, BlockerCode
+from beaver.contract import AgentName, BlockerCode, carried_catalogue
 from beaver.inventory.agent import inventory_agent
+from beaver.orchestrator import orchestrator_agent
+from beaver.quoting import tools
 from beaver.quoting.agent import quoting_agent
 from beaver.quoting.models import DiscountBand
 from beaver.quoting.tools import (
     band_for_units,
     catalogue_price,
+    check_against_precedent,
     find_precedent,
     price_line,
     price_of,
 )
-from beaver.orchestrator import orchestrator_agent
 
 STEP_ID = "20260915T120000Z:1:001"
 REPLY = "Thank you for your enquiry — 500 sheets of A4 paper come to $23.75."
@@ -114,11 +118,24 @@ class TestTheLadder:
         between calls, and `quotes.csv` — 5 totals of -1 and only 57 of the 95
         survivors reconciling — never enters the arithmetic."""
         by_name = {row["item_name"]: row["unit_price"] for row in starter.paper_supplies}
-        [priced] = catalogue_price(["Rolls of banner paper (36-inch width)"])
-        assert priced.unit_price == by_name["Rolls of banner paper (36-inch width)"]
-        with starter.engine().connect() as conn:
-            historical = conn.execute(text("SELECT total_amount FROM quotes LIMIT 1")).scalar()
-        assert a_quoted_line(500).line_total != historical
+        priced = catalogue_price(sorted(carried_catalogue()))
+        assert len(priced) == 18
+        assert all(line.unit_price == by_name[line.item_name] for line in priced)
+
+    def test_the_seeded_quote_history_is_never_an_arithmetic_source(self, seeded_db):
+        """5 of its 100 totals are -1 and only 57 of the 95 survivors reconcile
+        against the catalogue. The guarantee is structural: nothing that
+        computes a price can reach the `quotes` table, because only
+        `find_precedent` reads it and `price_line` cannot call it."""
+        source = Path(tools.__file__).read_text()
+        assert "FROM quotes" not in source
+        assert signature(price_line).parameters.keys() == {
+            "line_id",
+            "quote_line_id",
+            "item_name",
+            "units",
+            "unit_price",
+        }
 
     def test_a_name_we_do_not_carry_is_refused_rather_than_priced(self, seeded_db):
         """`Matte paper` is in the product universe and not in the 18 we sell.
@@ -165,10 +182,12 @@ class TestFindingPrecedent:
         assert comparison.comparable_totals == []
         assert "no precedent" in comparison.note.lower()
 
-    def test_the_error_rows_are_not_offered_as_comparable(self, seeded_db):
+    def test_the_error_rows_are_not_offered_as_comparable(self, seeded_db, monkeypatch):
         """5 of the 100 seeded totals are -1. A total of -1 is not a price the
-        business ever charged."""
-        comparison = find_precedent("L1", ["paper"], limit=100)
+        business ever charged, so it is not a comparison either."""
+        monkeypatch.setattr(tools, "PRECEDENT_LIMIT", 100)
+        comparison = find_precedent("L1", ["paper"])
+        assert comparison.comparable_totals
         assert all(total > 0 for total in comparison.comparable_totals)
 
     def test_no_terms_at_all_is_a_miss_rather_than_the_whole_corpus(self, searches):
@@ -185,6 +204,37 @@ class TestFindingPrecedent:
         priced = a_quoted_line(500)
         find_precedent("L1", ["paper"])
         assert a_quoted_line(500) == priced
+
+
+class TestCheckingThePriceAgainstPrecedent:
+    """Retrieval is precedent's first job and this is its second. It runs after
+    the price, on a function the model cannot call, and writes a sentence."""
+
+    def a_precedent(self, totals: list[float]):
+        return find_precedent("L1", ["zzzxxq"]).model_copy(
+            update={"precedent_found": bool(totals), "comparable_totals": totals}
+        )
+
+    @pytest.mark.parametrize(
+        "line_total, expected",
+        [(50.0, "within"), (500.0, "above"), (1.0, "below")],
+    )
+    def test_the_note_says_where_our_price_sits(self, seeded_db, line_total, expected):
+        checked = check_against_precedent(self.a_precedent([10.0, 100.0]), line_total)
+        assert expected in checked.note
+        assert "$10.00-$100.00" in checked.note
+
+    def test_a_miss_is_left_as_it_was(self, seeded_db):
+        missed = self.a_precedent([])
+        assert check_against_precedent(missed, 50.0) == missed
+
+    def test_the_check_returns_a_note_and_nothing_a_price_is_made_of(self, seeded_db):
+        """It takes the price and gives back prose. There is no path from a
+        past total to `price_line`, which takes neither."""
+        checked = check_against_precedent(self.a_precedent([10.0, 100.0]), 50.0)
+        assert checked.model_dump(exclude={"note"}) == self.a_precedent(
+            [10.0, 100.0]
+        ).model_dump(exclude={"note"})
 
 
 class TestTheRegistry:
@@ -336,6 +386,33 @@ def scripted(lines: list[dict], as_of_date: str = "2025-04-01", seen: list | Non
     return FunctionModel(model)
 
 
+def narrating(model: FunctionModel) -> FunctionModel:
+    """The same scripted model, except that the orchestrator writes a real reply.
+
+    Everywhere else the orchestrator's final turn is a fixed constant, because
+    what is under test there is the wiring. Here the reply is rendered from what
+    the delegation actually handed up, which is the only part of the prose rule
+    a scripted model can honestly check.
+
+    Args:
+        model: The scripted model to wrap.
+
+    Returns:
+        A model that narrates the orchestrator's last turn.
+    """
+
+    def narrate(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        response = model.function(messages, info)
+        if not any(isinstance(part, TextPart) for part in response.parts):
+            return response
+        lines = quoted_lines_handed_up(messages)
+        return ModelResponse(
+            parts=[TextPart(" ".join(a_price_sentence(line) for line in lines))]
+        )
+
+    return FunctionModel(narrate)
+
+
 def stated(lines: list[tuple[str, str, int]]) -> list[dict]:
     """Resolved lines as `(line_id, item_name, units)`, plus the words behind them."""
     return [
@@ -363,6 +440,9 @@ async def quote(lines: list[tuple[str, str, int]], trail, as_of_date: str = "202
 
 
 class TestTheEnvelope:
+    """What quoting hands back: every resolved line priced, blind to stock, and
+    the precedent behind each kept on the half the customer never sees."""
+
     async def test_two_lines_on_one_request_band_independently(self, trail):
         """Per line, not per order — so the discount is traceable to the thing
         that earned it, and a small line is not carried by a large one."""
@@ -416,6 +496,37 @@ class TestTheEnvelope:
         assert len(read_quote_registry()) == 1
 
 
+def quoted_lines_handed_up(messages) -> list[dict]:
+    """The priced lines as they reached the orchestrator, out of its own context."""
+    for message in messages:
+        for part in getattr(message, "parts", []):
+            if getattr(part, "tool_name", None) != "consult_quoting":
+                continue
+            payload = to_jsonable_python(getattr(part, "content", None))
+            if isinstance(payload, dict) and "customer" in payload:
+                return payload["customer"]["quoted_lines"]
+    return []
+
+
+def a_price_sentence(line: dict) -> str:
+    """One line rendered the way the orchestrator's instructions ask for it.
+
+    A stand-in for the live model's own words, so that what is under test is
+    whether the payload *lets* the sentence be written — the rate, what earned
+    it, and both totals — rather than a particular turn of phrase.
+    """
+    sentence = (
+        f"{line['units']} units of {line['item_name']} at "
+        f"${line['unit_price']:.2f} each — ${line['gross_total']:.2f}"
+    )
+    if line["discount_rate"]:
+        sentence += (
+            f", less {line['discount_rate']:.0%} for the size of this line — "
+            f"${line['line_total']:.2f}"
+        )
+    return sentence
+
+
 class TestThroughTheOrchestrator:
     """Inventory, then quoting — the sequence #4 fixed, as the harness drives it."""
 
@@ -426,8 +537,10 @@ class TestThroughTheOrchestrator:
         self.seen: list = []
         return trail
 
-    async def handle(self, lines: list[tuple[str, str, int]]):
+    async def handle(self, lines: list[tuple[str, str, int]], narrate: bool = False):
         model = scripted(stated(lines), seen=self.seen)
+        if narrate:
+            model = narrating(model)
         with (
             orchestrator_agent.override(model=model),
             inventory_agent.override(model=model),
@@ -468,6 +581,20 @@ class TestThroughTheOrchestrator:
         handed_up = self.orchestrator_saw()
         assert "precedents" not in handed_up
         assert "comparable_totals" not in handed_up
+
+    async def test_the_reply_can_state_the_rate_and_what_earned_it(self):
+        """Quoting supplies facts and the orchestrator supplies the words, so
+        the test the AC deserves is that the facts suffice: the rate, the line
+        that earned it, and both totals are all on the customer half."""
+        reply = await self.handle([("L1", "A4 paper", 500)], narrate=True)
+        assert "500 units of A4 paper at $0.05 each — $25.00" in reply
+        assert "less 5% for the size of this line — $23.75" in reply
+
+    async def test_a_line_that_earned_nothing_gets_no_discount_sentence(self):
+        """A discount sentence on every line makes the real ones invisible."""
+        reply = await self.handle([("L1", "A4 paper", 300)], narrate=True)
+        assert "$15.00" in reply
+        assert "less" not in reply
 
     async def test_the_registry_row_is_written_before_anyone_rules_on_delivery(self):
         """Sales does not exist yet, and the row exists anyway. That gap is the

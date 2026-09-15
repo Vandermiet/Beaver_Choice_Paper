@@ -104,10 +104,41 @@ def band_for_units(units: int) -> DiscountBand:
     Returns:
         The band, and through it the rate.
     """
-    for floor, band in LADDER:
-        if units >= floor:
-            return band
-    return DiscountBand.NONE
+    # `LADDER`'s last rung has a floor of zero, so the search always finds
+    # one. A fallback here would be a second definition of "no discount".
+    return next(band for floor, band in LADDER if units >= floor)
+
+
+def quote_line_id(run_id: str, request_id: str, line_id: str) -> str:
+    """Mint the registry key for one priced line.
+
+    The same convention as the resume token, so the key carries its own
+    provenance and joins to the audit trail and to `quote_fulfilments` on
+    identifiers those already use. It is minted here rather than in the agent
+    because `record_quote` writes it as a primary key, and one format known in
+    two places is one format that can drift.
+
+    Args:
+        run_id: The run the quote belongs to.
+        request_id: The request the quote belongs to.
+        line_id: The requested line being priced.
+
+    Returns:
+        `run_id:request_id:line_id`.
+    """
+    return f"{run_id}:{request_id}:{line_id}"
+
+
+def quote_total(lines: list[QuotedLine]) -> float:
+    """What the priced lines come to, after each line's own discount.
+
+    Args:
+        lines: The priced lines.
+
+    Returns:
+        The sum of their line totals, to the cent.
+    """
+    return round(sum(line.line_total for line in lines), 2)
 
 
 def price_line(
@@ -150,9 +181,7 @@ def price_line(
     )
 
 
-def find_precedent(
-    line_id: str, search_terms: list[str], limit: int = PRECEDENT_LIMIT
-) -> PrecedentComparison:
+def find_precedent(line_id: str, search_terms: list[str]) -> PrecedentComparison:
     """Look for past quotes that resemble this line, after its price is fixed.
 
     Precedent is a comparison and never an instruction: it cannot change what
@@ -167,7 +196,6 @@ def find_precedent(
     Args:
         line_id: The line being compared.
         search_terms: A word or two from the item's name. Fewer is better.
-        limit: How many past quotes to retrieve at most.
 
     Returns:
         What the history had to say, including whether it said nothing.
@@ -179,17 +207,24 @@ def find_precedent(
         # particular, dressed as a hit.
         return _comparison(line_id, [], [], degraded=False)
 
-    rows = starter.search_quote_history(terms, limit)
+    rows = starter.search_quote_history(terms, PRECEDENT_LIMIT)
     degraded = False
     if not rows and len(terms) > 1:
         terms = [_most_distinctive(terms)]
         degraded = True
-        rows = starter.search_quote_history(terms, limit)
+        rows = starter.search_quote_history(terms, PRECEDENT_LIMIT)
     return _comparison(line_id, terms, rows, degraded=degraded)
 
 
 def _usable(search_terms: list[str]) -> list[str]:
-    """The terms worth searching on: trimmed, de-duplicated, blanks dropped."""
+    """The terms worth searching on: trimmed, de-duplicated, blanks dropped.
+
+    Args:
+        search_terms: The terms as the model supplied them.
+
+    Returns:
+        The terms to search on, in the order they were given.
+    """
     trimmed = (term.strip().lower() for term in search_terms)
     return list(dict.fromkeys(term for term in trimmed if term))
 
@@ -231,13 +266,11 @@ def _comparison(
         # business ever charged, so it is not a comparison either.
         if row.get("total_amount") is not None and float(row["total_amount"]) > 0
     ]
-    if not rows:
-        note = f"no precedent found for {terms or 'this line'}"
-    else:
-        note = (
-            f"{len(rows)} past quotes mention {terms}; their totals are house "
-            f"voice rather than arithmetic and did not touch this price"
-        )
+    note = (
+        f"{len(rows)} past quotes mention {terms}"
+        if rows
+        else f"no precedent found for {terms or 'this line'}"
+    )
     return PrecedentComparison(
         line_id=line_id,
         search_terms=terms,
@@ -245,6 +278,48 @@ def _comparison(
         degraded_to_single_term=degraded,
         comparable_totals=totals,
         note=note,
+    )
+
+
+def check_against_precedent(
+    comparison: PrecedentComparison, line_total: float
+) -> PrecedentComparison:
+    """Note where the computed price sits against what the history charged.
+
+    The second half of precedent's job — retrieval is the first — and the
+    reason the two are separate functions. `find_precedent` is what the model
+    calls and it never sees a price, so there is no argument through which a
+    past total could reach the arithmetic; this runs afterwards, in the output
+    function, and its only effect is a sentence in the internal payload.
+
+    The totals it compares against do not reconcile with our catalogue, so
+    "outside the range" is never evidence that our price is wrong. It is
+    evidence that the seeded history priced differently, which is worth
+    recording and worth acting on by nothing.
+
+    Args:
+        comparison: The precedent as retrieved.
+        line_total: What this line was priced at, after its discount.
+
+    Returns:
+        The same comparison, with the check written into its note.
+    """
+    totals = comparison.comparable_totals
+    if not totals:
+        return comparison
+    where = (
+        "within"
+        if min(totals) <= line_total <= max(totals)
+        else "above" if line_total > max(totals) else "below"
+    )
+    return comparison.model_copy(
+        update={
+            "note": (
+                f"{comparison.note}; ${line_total:,.2f} is {where} their range of "
+                f"${min(totals):,.2f}-${max(totals):,.2f}, which is house voice "
+                f"rather than arithmetic and did not touch this price"
+            )
+        }
     )
 
 

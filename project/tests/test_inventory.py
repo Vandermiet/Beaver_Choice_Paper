@@ -326,6 +326,9 @@ class TestThroughTheOrchestrator:
         await self.handle([("10000 sheets of printer paper", 10_000, "sheets")])
         handed_up = self.orchestrator_saw()
         assert '"shortfall_units":9728' in handed_up.replace(" ", "")
-        assert "272" not in handed_up
+        # Anchored to the JSON value position: every message carries a
+        # microsecond timestamp, so a bare "272" matches a clock roughly one
+        # run in thirty.
+        assert ":272" not in handed_up.replace(" ", "")
 
 

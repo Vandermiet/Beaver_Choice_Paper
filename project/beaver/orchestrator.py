@@ -23,6 +23,7 @@ Two boundaries this module exists to hold:
 import functools
 import logging
 
+from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.usage import UsageLimits
 
@@ -123,12 +124,11 @@ async def consult_inventory(
         The lines inventory resolved, under the exact names we sell them as,
         and one blocker for each line it could not.
     """
-    prompt = (
-        f"The request arrived on {as_of_date}. Resolve these lines:\n"
-        + "\n".join(line.model_dump_json() for line in lines)
-    )
     return await inventory_agent.run(
-        prompt, deps=ctx.deps, usage=ctx.usage, model=shared_model()
+        _ask("Resolve these lines", lines, as_of_date),
+        deps=ctx.deps,
+        usage=ctx.usage,
+        model=shared_model(),
     )
 
 
@@ -153,12 +153,32 @@ async def consult_quoting(
         Each line priced: the units, the unit price, the band and rate it
         earned, and the totals before and after the discount.
     """
-    prompt = (
-        f"The request arrived on {as_of_date}. Price these resolved lines:\n"
-        + "\n".join(line.model_dump_json() for line in lines)
-    )
     return await quoting_agent.run(
-        prompt, deps=ctx.deps, usage=ctx.usage, model=shared_model()
+        _ask("Price these resolved lines", lines, as_of_date),
+        deps=ctx.deps,
+        usage=ctx.usage,
+        model=shared_model(),
+    )
+
+
+def _ask(instruction: str, lines: list[BaseModel], as_of_date: str) -> str:
+    """The prompt a delegation sends: what to do, the date, and the lines as JSON.
+
+    Every delegation asks the same shape of question about the same list of
+    lines, and the lines travel as their own JSON rather than as prose, so the
+    delegate parses a model it already knows instead of re-reading English.
+
+    Args:
+        instruction: What the delegate is being asked to do with the lines.
+        lines: The lines, whichever line model this delegation carries.
+        as_of_date: The date the request arrived, as `YYYY-MM-DD`.
+
+    Returns:
+        The prompt.
+    """
+    return (
+        f"The request arrived on {as_of_date}. {instruction}:\n"
+        + "\n".join(line.model_dump_json() for line in lines)
     )
 
 

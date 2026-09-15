@@ -13,6 +13,8 @@ it is inert. It is also why `project_starter.py` imports this package from
 import would close the cycle.
 """
 
+from sqlalchemy import Engine
+
 import project_starter as _starter
 
 db_engine = _starter.db_engine
@@ -29,6 +31,7 @@ search_quote_history = _starter.search_quote_history
 
 __all__ = [
     "db_engine",
+    "engine",
     "paper_supplies",
     "create_transaction",
     "generate_financial_report",
@@ -39,3 +42,18 @@ __all__ = [
     "init_database",
     "search_quote_history",
 ]
+
+
+def engine() -> Engine:
+    """The live SQLAlchemy engine the provided helpers read and write through.
+
+    A function rather than the `db_engine` re-export above, because the helpers
+    resolve `db_engine` as a module global on every call — so a test that swaps
+    `project_starter.db_engine` for a temporary database moves the helpers but
+    not a binding captured at import time. Anything issuing its own SQL must go
+    through here to stay pointed at the same database as the helpers.
+
+    Returns:
+        The engine `project_starter` currently holds.
+    """
+    return _starter.db_engine

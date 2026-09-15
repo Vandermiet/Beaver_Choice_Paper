@@ -5,3 +5,5 @@ z_project_rubric.md
 .env
 .DS_Store
 .claude/worktrees/
+__pycache__/
+*.pyc

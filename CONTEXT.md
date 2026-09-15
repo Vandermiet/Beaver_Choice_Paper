@@ -52,19 +52,25 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Generic envelope** — The same envelope parameterised by payload type, so each agent's payload stays strictly typed. *Generic* is the mechanism; *canonical* is the claim. An envelope can be canonical without being generic (one shared shape with an untyped payload), so the two terms are not interchangeable.
 
-**Customer-facing payload** — The half of a domain agent's response that the orchestrator is given. Contains nothing the customer may not see.
+**Customer-facing payload** — The half of a domain agent's response that the orchestrator is given. Contains nothing the customer may not see. It carries two kinds of thing, because the orchestrator has two roles: what it may put into prose, and what it may *route* onward to the next agent. Both are safe to disclose; the distinction is about use, not about secrecy.
+
+**Agent view** — What the orchestrator actually receives from a delegation: the customer-facing payload and the customer blockers, and nothing else. The internal payload is extracted at the delegation seam and written to the audit trail without ever entering the orchestrator's context. The guarantee is structural — the orchestrator cannot disclose what it was never handed.
 
 **Internal payload** — The half the orchestrator is never given: cash balances, margins, stock counts, raw errors. Withheld structurally, not by instruction — the orchestrator cannot disclose what never enters its context.
 
 ## Blockers
 
-**Blocker signal** — A structured report that something in a domain agent's own domain prevents part or all of a request from proceeding. Carries an enumerated code, the scope it applies to, a severity, and an internal detail. The code makes a rejection mechanically testable; the detail is internal-only.
+**Blocker signal** — A structured report that something in a domain agent's own domain prevents a requested line from proceeding. Carries an enumerated code, the line it applies to, and an internal detail. The code makes a rejection mechanically testable; the detail is internal-only and never crosses to the orchestrator.
 
-**Scope** — What a blocker applies to: the whole request, or one named requested line.
+**Customer blocker** — The half of a blocker signal the orchestrator is given: the code and the line, without the detail. Derived from the signal rather than raised alongside it, so the two cannot disagree and the detail cannot be forgotten on the way up.
 
-**Severity** — *Fatal* (nothing in the request can be served) or *partial* (one line drops, the rest continue). A property of the code, not a free choice of the agent raising it.
+**Every blocker is line-scoped** — No blocker refuses a whole request. A failure confined to one line drops that line and the survivors continue; a request ends rejected only when every one of its lines has dropped. Four agents arrived at this independently, each on the same argument — declining an order for a failure that touched one line of it is a worse answer than serving the rest — so the business has no notion of a fatal blocker at all.
+
+**One blocker per line** — A requested line raises at most one blocker, and resolution is judged before units. A line that names something we do not sell *and* counts it in a unit we cannot price has failed once, not twice, and the audit trail must not count it as two rejections. Across the bounded retry the *last* blocker is the one the customer hears: a line short of stock, restocked, then refused on the delivery promise is told about the promise, because by then we are no longer out of it. Every blocker raised is still kept in the trail; precedence governs what is spoken, not what is recorded.
 
 **Commitment** — The moment a line stops being an offer and becomes money moving. Everything a domain agent verifies on a line is verified *before* any line is committed, because nothing here can be undone.
+
+**Bounded retry** — The one second attempt the orchestrator makes at a request, after replenishment has bought stock a line was short of. It carries *only* the lines that were short: a line already committed is never offered for commitment again, so the same sale can never be written twice. The agent that commits lines holds no memory of the first attempt, and needs none.
 
 **Revisable blocker** — A blocker the customer could plausibly clear by amending their order — an ambiguous item, an unrecognised unit, an unmeetable deadline. Contrasted with a flat refusal, which no amendment fixes (we do not carry it) or which the customer is never told about (insufficient cash). Revisability is a property of the code. It does **not** imply suspension: a revisable blocker raised after commitment is spoken as prose — the reply names the alternative we could have met — because a flow can only suspend before money moves.
 
@@ -92,9 +98,11 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Reorder threshold** — The per-item stock floor recorded in the carried catalogue. It is a *tripwire for sizing*, not a trigger: nothing watches it, and falling below it starts nothing on its own.
 
-**Reorder trigger** — The only thing that sets replenishment in motion: a customer order that cannot be served from stock on hand. There is no periodic sweep. Every purchase this business makes is traceable to a customer who asked for something we did not have.
+**Reorder trigger** — The only thing that sets replenishment in motion: a line the business has actually refused to commit for want of stock. There is no periodic sweep, and an observation that stock is short is not itself a trigger — the purse opens on the refusal at commitment, not on the survey that saw it coming. Every purchase this business makes is traceable to a customer who asked for something we did not have.
 
-**Shortfall** — The units by which a requested line exceeds the stock held for that item. What the restock must at minimum cover.
+**Shortfall** — The units by which a requested line exceeds the stock held for that item. What the restock must at minimum cover. Inventory alone computes it; replenishment consumes it and never re-derives it from a stock reading of its own, because that would be two agents answering the same question.
+
+**Restock need** — A shortfall as it travels: the line, the item, and the units short. The one thing inventory passes through the orchestrator to replenishment. It carries the shortfall rather than the stock reading it was derived from, so what we hold is never routed anywhere it is not needed, and replenishment sizes its order from it directly.
 
 **Target stock level** — What replenishment restocks *to*, as distinct from what the order needs: the shortfall covered, and stock left back at the reorder threshold once the order has shipped. A restock serves the customer in front of us and rebuilds the floor in the same purchase. Measured *after* the sale — measured before, the order would immediately eat the floor we just bought.
 
@@ -104,7 +112,17 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Restock** — A purchase of stock from the supplier: money out, stock in. Booked on the day it is paid for, so the stock is on our books immediately; the supplier's lead time is carried forward into the delivery date we promise the customer, never into when the stock appears.
 
+**Speculative restock** — A purchase of goods that cannot reach the customer who triggered it in time. The business does not make one: where the supplier's lead time runs past the date the customer needs the goods by, nothing is bought at all — not even the part of the order that would have rebuilt the floor. Buying the floor alone would be a purchase sized by the reorder threshold and by nothing else, which is the periodic sweep the business has ruled out, arriving under a customer's name.
+
 **Cash guard** — Replenishment's refusal to spend more than the cash on hand. It applies **per item**: one item being unaffordable never withholds another we could pay for. Within a single item it is all-or-nothing — a shortfall is never part-filled, because half of what a line needs is money out with the line still declined. Revenue from the order being served does not count as cash on hand; the business cannot spend what it has not been paid.
+
+## Delivery
+
+**Delivery promise** — The date the business commits to putting goods in the customer's hands. A property of *where the goods are*, not of how many were asked for: what we hold is promised the day the request arrives, and what we must buy in is promised the day it reaches us. The business never promises a customer a date earlier than its own supplier gives it.
+
+**Supplier lead time** — How long the supplier takes to reach *us*, sized by the quantity we are buying. An input to a purchase, and only indirectly to a sale — it reaches the customer solely through the delivery promise on a line we had to buy in. Applying it to goods already on the shelf would refuse orders we could fill from stock on hand.
+
+**Unmeetable deadline** — A delivery promise later than the date the customer needs the goods by. Reachable only on a line the business would have had to buy in, since a line filled from stock is promised the day it is asked for. It is judged by the buyer at the moment of buying, which is why the goods are never bought: the business learns that it cannot meet the date from the same lead time it would have paid for. It declines that line and no other, and — sibling lines on the same request having possibly already been committed — is spoken as prose naming the date we could have met, never as a suspension.
 
 ## Outcomes
 

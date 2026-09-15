@@ -32,6 +32,20 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Stocked** — Carried *and* holding positive stock as of a date. A carried item that is stocked out is still on offer; an item that is not carried never was. The two are different answers and never collapse into one.
 
+## Resolution
+
+**Modifier** — A word the customer wraps around the thing they want. Four kinds, treated differently: *colour* and *quality* are sales adjectives the catalogue does not model and are dropped; *finish or material* is what the catalogue actually names and is what selects an item; *size* neither selects nor is ignored — see *size veto*.
+
+**Size veto** — A size the customer names can disqualify a resolution but never select one. The catalogue has no size axis: size appears only incidentally, inside a handful of item names. A named size absent from the entire product universe refuses the line; a size the universe does name constrains nothing, and the line resolves on its finish or material instead. So "A4 glossy paper" is glossy paper, and "A3 glossy paper" is nothing we sell.
+
+**Category guard** — The refusal to substitute across product categories. A requested line whose only carried candidate sits in a different category from the line's best match in the wider product universe is not carried, however closely the two names read. What arrives on a pallet as large-format is not what was asked for as paper.
+
+**Default plain-paper item** — The single carried item that a generic request for ordinary paper resolves to. "Printer paper", "printing paper", "copy paper", "white paper" name no product in particular; they name the everyday sheet a paper company is expected to sell. Generic is not the same as unresolvable, and a paper business that cannot sell printer paper has failed at the only thing it does.
+
+**Ambiguity** — Two or more carried candidates surviving every resolution rule. The business never guesses which one the customer meant; it asks. Ambiguity is a property of the candidate set, not of how far apart the candidates are priced.
+
+**Resolution trace** — The structured record of how one requested line became, or failed to become, a resolved item: the candidates considered, the best match in the wider universe, and the rule that decided it. Internal only. It exists so that "why did it pick this?" is answerable by query rather than by reading a transcript.
+
 ## Contracts
 
 **Canonical envelope** — The single response shape every domain agent returns. *Canonical* is a claim about authority: no agent invents its own response shape.
@@ -63,6 +77,16 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 **Transaction registry** — The record of money and stock actually moving: the `transactions` table, the authority that cash and inventory are read from.
 
 **Quote-as-order** — The deliberate collapse of quoting and ordering into one act, because the simulation has no channel through which a customer could accept. A quote request is treated as a firm order: it is priced, committed and written in one turn.
+
+## Pricing
+
+**The ladder** — The fixed schedule of volume discounts the business offers. Deterministic and public in the sense that the same line always earns the same band: the price is never a judgement the model makes, only an arithmetic the ladder produces. It exists so that "why this price?" has an answer that does not begin with "the model decided".
+
+**Discount band** — The rung of the ladder a line lands on, measured in *units on that line* and never in money. Prices across the catalogue span fiftyfold, so a discount earned by spend would reward buying expensive things rather than buying many, which is not what a bulk discount is for. Bands apply per line, independently, and never compound.
+
+**Precedent** — Past quotes retrieved from the seeded history, consulted *after* the price is computed and never permitted to move it. The historical totals do not reconcile with the catalogue, so they are evidence of how the business talks about its prices, not of what the prices were. Finding none is a legitimate outcome and is recorded as one.
+
+**Quote registry row** — One priced line as it was offered: the item, the units, the price, and the band that earned it. Written before anyone rules on whether the line can be delivered, so the rows that never become transactions are the business's rejection history rather than a gap in its records.
 
 ## Replenishment
 

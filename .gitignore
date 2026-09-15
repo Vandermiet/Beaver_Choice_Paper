@@ -7,3 +7,5 @@ z_project_rubric.md
 .claude/worktrees/
 __pycache__/
 *.pyc
+munder_difflin.db
+audit/

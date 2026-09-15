@@ -613,7 +613,7 @@ def search_quote_history(search_terms: List[str], limit: int = 5) -> List[Dict]:
 def run_test_scenarios():
     
     print("Initializing Database...")
-    init_database()
+    init_database(db_engine)
     try:
         quote_requests_sample = pd.read_csv("quote_requests_sample.csv")
         quote_requests_sample["request_date"] = pd.to_datetime(
@@ -639,6 +639,12 @@ def run_test_scenarios():
     ############
     ############
 
+    # Imported here rather than at module level: `beaver.starter` imports this
+    # module by name, and a module-level import would close that cycle.
+    import asyncio
+
+    from beaver.orchestrator import handle_request
+
     results = []
     for idx, row in quote_requests_sample.iterrows():
         request_date = row["request_date"].strftime("%Y-%m-%d")
@@ -660,7 +666,13 @@ def run_test_scenarios():
         ############
         ############
 
-        # response = call_your_multi_agent_system(request_with_date)
+        response = asyncio.run(
+            handle_request(
+                request_with_date,
+                request_date=request_date,
+                request_id=idx + 1,
+            )
+        )
 
         # Update state
         report = generate_financial_report(request_date)
@@ -690,8 +702,16 @@ def run_test_scenarios():
     print(f"Final Cash: ${final_report['cash_balance']:.2f}")
     print(f"Final Inventory: ${final_report['inventory_value']:.2f}")
 
-    # Save results
-    pd.DataFrame(results).to_csv("test_results.csv", index=False)
+    # Save results. Every run is archived under test_results/ with the ticket
+    # number as the suffix, so results from different tickets sit side by side:
+    # set BEAVER_TICKET=101 to write test_results/test_results_101.csv.
+    results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_results")
+    os.makedirs(results_dir, exist_ok=True)
+    ticket = os.environ.get("BEAVER_TICKET", "").strip()
+    suffix = f"_{ticket}" if ticket else ""
+    pd.DataFrame(results).to_csv(
+        os.path.join(results_dir, f"test_results{suffix}.csv"), index=False
+    )
     return results
 
 

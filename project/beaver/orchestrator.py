@@ -4,9 +4,143 @@ It never acts on a system of record. It plans and drives the sequence of
 delegations, reads the signals that come back, and is the only component that
 writes customer-facing prose.
 
-Ticket 101 stubs the seam so the harness runs end to end. The sequence, the
-bounded retry and the outcome derivation land in tickets 103–108.
+Ticket 103 wires the first delegation: the orchestrator extracts catalogue-blind
+requested lines from the customer's prose, inventory resolves them, and the
+reply is composed here from what came back. Quoting, sales, replenishment, the
+bounded retry and the outcome derivation land in tickets 104-108.
+
+Two boundaries this module exists to hold:
+
+- **The orchestrator extracts; inventory resolves.** The lines it emits carry
+  the customer's own words, the quantity as stated and the unit as stated. It
+  knows no catalogue and invents no item name, because a hallucinated name
+  fails downstream and a validator is the only thing that can prove it did not.
+- **The orchestrator owns every customer-facing word.** Domain agents supply
+  facts and codes and never prose, so tone cannot drift across four agents.
 """
+
+import functools
+import logging
+
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.usage import UsageLimits
+
+from beaver.audit import AgentDeps, AuditTrail, delegation, new_run_id
+from beaver.contract import AgentName, RequestedLine
+from beaver.inventory.agent import inventory_agent
+from beaver.llm import shared_model
+
+INSTRUCTIONS = """
+You are the customer desk of Beaver's Choice Paper Company, a paper supplier.
+You receive one enquiry and you write one reply. You have no catalogue, no
+prices and no stock figures of your own: everything you state as fact comes
+back from a colleague you consult.
+
+First, read the enquiry and break it into requested lines — one line per thing
+the customer asked for. For each line, keep the customer's own words for the
+item, the quantity exactly as they stated it, and the unit exactly as they
+stated it. Number the lines "L1", "L2", and so on, in the order they appear.
+Do not translate a request into a product name, do not merge two lines, do not
+invent a quantity the customer did not give, and do not convert a unit.
+
+Then call `consult_inventory` **once**, with every line and the date of the
+request. It answers with the lines we can supply, under the exact names we sell
+them as, and a blocker for each line we cannot. Each blocker names one line and
+one reason:
+
+- `item_not_carried` — we do not sell that. Say so plainly; do not offer a
+  substitute, and do not promise to look into it.
+- `size_not_carried` — we do not sell that size, but we do sell the product.
+  Say which sizes are not something we stock and invite them to restate it.
+- `item_ambiguous` — two of our products fit their words. Ask which they meant.
+- `quantity_missing` — ask how many they need.
+- `unit_not_understood` — we cannot price that unit. Ask them to restate the
+  line in sheets or units.
+
+Finally write the reply. Your entire answer **is** the letter — a short, warm,
+professional message that a customer could read as it stands. Do not show your
+working, do not list the request back with its line numbers, do not write
+headings like "Requested Lines" or "Reply", and do not sign it with a
+placeholder name: sign off as Beaver's Choice Paper Company.
+
+Confirm the lines we can supply by the name we sell them as and the quantity
+they asked for. Address every line we could not, in the customer's own terms,
+and put all of your questions together in one place so one round of
+correspondence clears them.
+
+Never state a price, a total, a discount or a delivery date — none of those
+have been worked out yet, and inventing one would be a promise the business
+has not made. Never mention stock levels, our cash position, our suppliers,
+internal codes, line numbers, tools or colleagues: the customer is reading a
+letter from a company, not a system report.
+""".strip()
+
+orchestrator_agent = Agent(
+    deps_type=AgentDeps,
+    output_type=str,
+    instructions=INSTRUCTIONS,
+    name="orchestrator",
+    retries=3,
+)
+
+
+@orchestrator_agent.tool
+@delegation(AgentName.INVENTORY)
+async def consult_inventory(
+    ctx: RunContext[AgentDeps],
+    lines: list[RequestedLine],
+    as_of_date: str,
+):
+    """Ask inventory which of the requested lines we sell, and under what name.
+
+    Give it every line of the request in the customer's own words, including
+    the ones you doubt we carry — deciding that is inventory's job, not yours.
+
+    Args:
+        lines: The requested lines, catalogue-blind: the customer's own words
+            for the item, the quantity as stated, and the unit as stated.
+        as_of_date: The date the request arrived, as `YYYY-MM-DD`.
+
+    Returns:
+        The lines inventory resolved, under the exact names we sell them as,
+        and one blocker for each line it could not.
+    """
+    prompt = (
+        f"The request arrived on {as_of_date}. Resolve these lines:\n"
+        + "\n".join(line.model_dump_json() for line in lines)
+    )
+    return await inventory_agent.run(
+        prompt, deps=ctx.deps, usage=ctx.usage, model=shared_model()
+    )
+
+
+#: How many model requests one customer request may spend, across the
+#: orchestrator and everything it delegates to. A model that loops instead of
+#: answering is the failure this bounds, and it is a real one: an early run
+#: watched one request call `check_stock` eighty-two times and take the other
+#: nineteen requests down with it. Ten is about twice a healthy request's cost.
+REQUEST_BUDGET = UsageLimits(request_limit=10)
+
+_log = logging.getLogger(__name__)
+
+APOLOGY = (
+    "Thank you for your enquiry. We are sorry — we were unable to process your "
+    "request automatically, and a member of our team will follow it up with you "
+    "directly."
+)
+
+
+@functools.cache
+def trail() -> AuditTrail:
+    """The audit trail this process writes to, minted once per run.
+
+    The harness has no notion of a run, so the first request to be handled
+    names it and every later one joins it.
+
+    Returns:
+        The trail, stamped with this run's id.
+    """
+    return AuditTrail(run_id=new_run_id())
 
 
 async def handle_request(
@@ -15,12 +149,6 @@ async def handle_request(
     request_id: int,
 ) -> str:
     """Handle one customer request and return the reply the customer reads.
-
-    This is the locked seam `handle_request(CustomerRequest) -> RequestResolution`
-    in its stub form: ticket 102 introduces the kernel models and the arguments
-    below become a `CustomerRequest`, the return becomes a `RequestResolution`,
-    and the harness renders `resolution.customer_message`. The name and the
-    call site do not move.
 
     Args:
         request_with_date: The customer's prose with the request date appended,
@@ -34,8 +162,20 @@ async def handle_request(
     Returns:
         The customer-facing reply.
     """
-    return (
-        f"Thank you for your enquiry of {request_date}. "
-        "Our team is reviewing your request and will respond shortly. "
-        f"(Placeholder reply for request {request_id}; the agent system is not yet wired.)"
-    )
+    deps = AgentDeps(trail=trail(), request_id=str(request_id))
+    try:
+        result = await orchestrator_agent.run(
+            f"{request_with_date}\n\nThe date of this request is {request_date}.",
+            deps=deps,
+            model=shared_model(),
+            usage_limits=REQUEST_BUDGET,
+        )
+    except Exception:
+        # A crash is a bug, and a bug must not look like a business decision:
+        # nothing here raises a blocker signal, and the trail already holds the
+        # exception in `agent_steps.error`. What it must also not do is end the
+        # evaluation — the harness has no error handling of its own, so an
+        # escaping exception would take the remaining requests with it.
+        _log.exception("request %s failed", request_id)
+        return APOLOGY
+    return result.output

@@ -4,8 +4,8 @@ These are structural assertions on purpose: ticket 101 builds the skeleton
 every later ticket plugs into, so the boundaries themselves are the behaviour.
 """
 
-import asyncio
 import importlib
+import inspect
 
 import pytest
 
@@ -34,18 +34,19 @@ def test_module_exists(name):
     assert importlib.import_module(name) is not None
 
 
-def test_handle_request_returns_a_placeholder_reply():
+def test_the_harness_call_site_does_not_move():
+    """101 stubbed `handle_request` and 103 filled it in. The name and the
+    three arguments the harness passes are the seam, so they are pinned here;
+    what the seam now does is covered in `test_inventory.py`, under a scripted
+    model rather than against the proxy."""
     from beaver.orchestrator import handle_request
 
-    reply = asyncio.run(
-        handle_request(
-            "I need 500 sheets of A4 paper. (Date of request: 2025-04-01)",
-            request_date="2025-04-01",
-            request_id=1,
-        )
-    )
-    assert isinstance(reply, str)
-    assert reply.strip()
+    assert inspect.iscoroutinefunction(handle_request)
+    assert list(inspect.signature(handle_request).parameters) == [
+        "request_with_date",
+        "request_date",
+        "request_id",
+    ]
 
 
 def test_build_model_constructs_a_chat_completions_model(monkeypatch):

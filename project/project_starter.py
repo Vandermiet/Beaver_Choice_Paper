@@ -613,7 +613,7 @@ def search_quote_history(search_terms: List[str], limit: int = 5) -> List[Dict]:
 def run_test_scenarios():
     
     print("Initializing Database...")
-    init_database()
+    init_database(db_engine)
     try:
         quote_requests_sample = pd.read_csv("quote_requests_sample.csv")
         quote_requests_sample["request_date"] = pd.to_datetime(
@@ -639,6 +639,12 @@ def run_test_scenarios():
     ############
     ############
 
+    # Imported here rather than at module level: `beaver.starter` imports this
+    # module by name, and a module-level import would close that cycle.
+    import asyncio
+
+    from beaver.orchestrator import handle_request
+
     results = []
     for idx, row in quote_requests_sample.iterrows():
         request_date = row["request_date"].strftime("%Y-%m-%d")
@@ -660,7 +666,13 @@ def run_test_scenarios():
         ############
         ############
 
-        # response = call_your_multi_agent_system(request_with_date)
+        response = asyncio.run(
+            handle_request(
+                request_with_date,
+                request_date=request_date,
+                request_id=idx + 1,
+            )
+        )
 
         # Update state
         report = generate_financial_report(request_date)

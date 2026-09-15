@@ -1,5 +1,18 @@
-pandas==2.2.3
+# Provided by the starter.
+# pandas is 2.3.3, not the starter's 2.2.3: under Python 3.14 with numpy 2.5,
+# pandas 2.2.3 segfaults in `pd.to_datetime(..., format=...)` — which is the
+# first thing `run_test_scenarios()` does. Held below 3.0, whose copy-on-write
+# semantics would break `init_database`'s chained assignments.
+pandas==2.3.3
 typing==3.7.4.3
-openai==1.76.0
 SQLAlchemy==2.0.40
 python-dotenv==1.1.0
+# openai is 3.14.0, not the starter's 1.76.0: pydantic-ai requires it.
+openai==3.14.0
+
+# The agent framework.
+pydantic-ai==2.43.0
+
+# Dev.
+pytest==9.1.1
+pytest-asyncio==1.4.0

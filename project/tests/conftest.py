@@ -45,3 +45,19 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "live" in item.keywords:
             item.add_marker(skip)
+
+
+@pytest.fixture
+def trail(seeded_db, tmp_path):
+    """A trail on a seeded database that has the six audit tables alongside its four.
+
+    The `run_id` is fixed rather than minted, so a test can assert on step ids.
+    The transcript sidecar is redirected into `tmp_path`, so a test run never
+    writes into the repo's own `audit/` directory.
+    """
+    from beaver.audit import AuditTrail, bootstrap_audit
+    from beaver.contract import forget_carried_catalogue
+
+    forget_carried_catalogue()
+    bootstrap_audit()
+    return AuditTrail(run_id="20260915T120000Z", transcript_dir=tmp_path / "audit")

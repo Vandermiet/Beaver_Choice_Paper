@@ -8,6 +8,7 @@ from an invisible gap.
 """
 
 import json
+from datetime import date
 
 import pytest
 from pydantic import BaseModel
@@ -15,9 +16,13 @@ from pydantic_ai import Agent, ModelMessagesTypeAdapter, RunContext
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
+from pydantic_ai.usage import RunUsage
 from sqlalchemy import text
 
+from tests.messages import returned
+
 import project_starter
+from beaver import orchestrator as customer_desk
 from beaver.audit import AgentDeps, AuditedToolset, AuditTrail, bootstrap_audit, delegation
 from beaver.contract import (
     AgentName,
@@ -27,6 +32,9 @@ from beaver.contract import (
     BlockerSignal,
     InternalPayload,
 )
+from beaver.inventory.agent import inventory_agent
+from beaver.quoting.agent import quoting_agent
+from beaver.sales.agent import sales_agent
 
 # --------------------------------------------------------------------------
 # The toy domain agent
@@ -162,6 +170,94 @@ async def consult_exploding_sales(ctx: RunContext[AgentDeps], line: str):
         Never.
     """
     raise RuntimeError("the sub-agent fell over")
+
+
+#: What the toy answers a delegation it was handed no lines for. Any string
+#: would do; a named one makes the assertion read as the claim it is.
+NOTHING_ASKED = "nobody asked me anything"
+
+#: The date every empty delegation below is called with. It decides nothing —
+#: there are no lines for it to decide about — and it is passed all the same,
+#: because the model passes it.
+AS_OF = "2025-04-01"
+
+#: The lines each delegation's *agent* was actually reached about. Empty is the
+#: assertion: a delegation with nothing to do never gets this far.
+ran: list[list[str]] = []
+
+
+def toy_nothing_to_do(ctx: RunContext[AgentDeps], lines: list[str]) -> ToyResponse | None:
+    """The toy's answer to a delegation with no lines in it.
+
+    Args:
+        ctx: The run context, carrying this delegation's own step id.
+        lines: The lines. Anything at all here and there is work to do.
+
+    Returns:
+        The canonical envelope with an empty payload, or `None` if there are
+        lines.
+    """
+    if lines:
+        return None
+    return ToyResponse(
+        agent=AgentName.INVENTORY,
+        step_id=ctx.deps.current_step_id,
+        request_id=ctx.deps.request_id,
+        customer=ToyCustomer(message=NOTHING_ASKED),
+        internal=ToyInternal(cash_before=SECRET, signals=[]),
+    )
+
+
+@orchestrator.tool
+@delegation(
+    AgentName.INVENTORY, name="listening_inventory", when_empty=toy_nothing_to_do
+)
+async def consult_inventory_about_lines(ctx: RunContext[AgentDeps], lines: list[str]):
+    """A delegation over a list of lines, which is every real one's shape.
+
+    Args:
+        lines: The lines to resolve.
+
+    Returns:
+        Inventory's view.
+    """
+    ran.append(list(lines))
+    return await toy_agent.run(" ".join(lines), deps=ctx.deps, usage=ctx.usage)
+
+
+def never_called(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """A model that fails rather than answering.
+
+    Args:
+        messages: Unused.
+        info: Unused.
+
+    Returns:
+        Never.
+    """
+    raise AssertionError("a delegation with nothing to do must run no model")
+
+
+def a_call_with_no_lines(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """A delegation called with an empty list, which is what the live model did."""
+    if len(messages) == 1:
+        return ModelResponse(
+            parts=[ToolCallPart("consult_inventory_about_lines", {"lines": []})]
+        )
+    return ModelResponse(parts=[TextPart("Thank you for your enquiry.")])
+
+
+def a_call_with_one_line(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """The same delegation with something in it."""
+    if len(messages) == 1:
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "consult_inventory_about_lines", {"lines": ["500 sheets of A4"]}
+                )
+            ]
+        )
+    return ModelResponse(parts=[TextPart("Thank you for your enquiry.")])
 
 
 def orchestrator_model(tool_name: str):
@@ -461,3 +557,120 @@ class TestTwoDelegationsInOneTurn:
         await run_toy(trail, model=two_calls_in_one_turn)
         delegations = [row for row in steps(trail) if row["kind"] == "delegation"]
         assert [row["parent_step_id"] for row in delegations] == [None, None]
+
+
+class TestADelegationWithNothingToDo:
+    """A delegation handed an empty list of lines answers without a model.
+
+    Measured on the ticket 109 evaluation run, where the orchestrator split one
+    enquiry across several `consult_inventory` calls and then consulted quoting
+    twice — the second time with `lines: []`. With no lines in the prompt the
+    model invented some, `CarriedItemName` refused every invented name, and the
+    third refusal ended the request as an apology counted `rejected` (#40).
+
+    The answer needs nobody: the canonical envelope with an empty payload and
+    no signals. It is made at the seam because the decorated function's
+    contract is to return an `AgentRunResult`, so it has no way to answer
+    except by running the model there is no reason to run.
+    """
+
+    async def test_the_agent_is_never_reached(self, trail):
+        ran.clear()
+        await run_toy(trail, model=a_call_with_no_lines)
+        assert ran == []
+
+    async def test_the_orchestrator_is_handed_the_canonical_envelope_anyway(self, trail):
+        result = await run_toy(trail, model=a_call_with_no_lines)
+        view = returned(result.all_messages(), "consult_inventory_about_lines")
+        assert view["customer"] == {"message": NOTHING_ASKED}
+        assert view["blockers"] == []
+        assert "internal" not in view
+
+    async def test_the_trail_records_that_the_orchestrator_asked(self, trail):
+        """A non-event is still a step: the orchestrator consulted a colleague,
+        and that it needed nobody to answer is the interesting part of the row."""
+        await run_toy(trail, model=a_call_with_no_lines)
+        [row] = [row for row in steps(trail) if row["kind"] == "delegation"]
+        assert row["error"] is None
+        assert json.loads(row["outputs"])["customer"]["message"] == NOTHING_ASKED
+        assert json.loads(row["inputs"])["kwargs"] == {"lines": []}
+
+    async def test_it_writes_no_transcript_line_because_no_model_ran(self, trail):
+        await run_toy(trail, model=a_call_with_no_lines)
+        assert trail.read_transcript() == []
+
+    async def test_the_same_delegation_with_a_line_in_it_still_runs_its_agent(self, trail):
+        """The other half of the claim: the guard is a guard on emptiness and
+        not a short circuit on the delegation."""
+        ran.clear()
+        await run_toy(trail, model=a_call_with_one_line)
+        assert ran == [["500 sheets of A4"]]
+        assert len(trail.read_transcript()) == 1
+
+
+def a_context(trail: AuditTrail) -> RunContext[AgentDeps]:
+    """The kind of run context the orchestrator's model calls a tool with.
+
+    Its model refuses to run, which is the assertion the class below makes most
+    often: an empty delegation that reached its agent would fail here rather
+    than quietly cost a model call.
+
+    Args:
+        trail: The trail to write to.
+
+    Returns:
+        The context, with a fresh journal on its deps.
+    """
+    return RunContext(
+        deps=AgentDeps(trail=trail, request_id="1"),
+        model=FunctionModel(never_called),
+        usage=RunUsage(),
+    )
+
+
+class TestTheDesksOwnEmptyDelegations:
+    """The same guard on the three tools the orchestrator's model actually calls.
+
+    The orchestrator's instructions already say to consult each colleague once
+    and to skip a step with nothing to do. An instruction is one model turn from
+    being ignored — the argument `place_order`'s `order_placed` guard is built
+    on — so each of the three answers an empty call structurally.
+    """
+
+    async def test_inventory_resolves_nothing_and_refuses_nothing(self, trail):
+        with inventory_agent.override(model=FunctionModel(never_called)):
+            view = await customer_desk.consult_inventory(a_context(trail), [], AS_OF)
+        assert view.customer.resolved_lines == []
+        assert view.customer.restock_needs == []
+        assert view.blockers == []
+
+    async def test_quoting_answers_a_quote_of_nought(self, trail):
+        """The call this defect was measured on."""
+        with quoting_agent.override(model=FunctionModel(never_called)):
+            view = await customer_desk.consult_quoting(a_context(trail), [], AS_OF)
+        assert view.customer.quoted_lines == []
+        assert view.customer.quote_total == 0.0
+
+    async def test_quoting_writes_no_registry_row_for_a_quote_nobody_asked_for(self, trail):
+        with quoting_agent.override(model=FunctionModel(never_called)):
+            await customer_desk.consult_quoting(a_context(trail), [], AS_OF)
+        with project_starter.db_engine.connect() as conn:
+            assert conn.execute(text("SELECT count(*) FROM quote_registry")).scalar() == 0
+
+    async def test_the_order_desk_commits_nothing_and_buys_nothing(self, trail):
+        ctx = a_context(trail)
+        with sales_agent.override(model=FunctionModel(never_called)):
+            order = await customer_desk.place_order(ctx, [], AS_OF)
+        assert (order.committed, order.declined, order.blockers) == ([], [], [])
+        assert order.order_total == 0.0
+        assert order.promised_delivery_date is None
+        assert [row for row in steps(trail) if row["kind"] == "delegation"] == []
+
+    async def test_an_empty_order_leaves_the_desk_open_for_the_real_one(self, trail):
+        """A non-event, so it neither counts as the one call to `place_order`
+        nor records the deadline of a request it did nothing about."""
+        ctx = a_context(trail)
+        with sales_agent.override(model=FunctionModel(never_called)):
+            await customer_desk.place_order(ctx, [], AS_OF, date(2025, 4, 15))
+        assert ctx.deps.journal.order_placed is False
+        assert ctx.deps.journal.deadline is None

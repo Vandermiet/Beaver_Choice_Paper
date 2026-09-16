@@ -51,11 +51,21 @@ from beaver.contract import (
     RequestResolution,
 )
 from beaver.inventory.agent import inventory_agent
-from beaver.inventory.models import ResolvedLine
+from beaver.inventory.models import (
+    InventoryCustomerPayload,
+    InventoryInternalPayload,
+    InventoryResponse,
+    ResolvedLine,
+)
 from beaver.llm import shared_model
 from beaver.outcome import derive_outcome, spoken_blockers, suspend
 from beaver.quoting.agent import quoting_agent
-from beaver.quoting.models import QuotedLine
+from beaver.quoting.models import (
+    QuotedLine,
+    QuotingCustomerPayload,
+    QuotingInternalPayload,
+    QuotingResponse,
+)
 from beaver.replenishment.agent import replenishment_agent
 from beaver.replenishment.models import RestockRequest
 from beaver.retry import (
@@ -163,8 +173,45 @@ orchestrator_agent = Agent(
 )
 
 
+def _nothing_to_resolve(
+    ctx: RunContext[AgentDeps], lines: list[RequestedLine], as_of_date: str
+) -> InventoryResponse | None:
+    """Inventory's answer to a request with no lines in it, or `None` if it has.
+
+    An enquiry the orchestrator read no lines out of resolves nothing and
+    refuses nothing, and inventory would say exactly that after a model call
+    spent on an empty list — `build_inventory_response` loops over the lines it
+    was given and there are none. So the seam says it instead.
+
+    `as_of_date` reaches the internal payload through the same pydantic
+    coercion the agent's own output function relies on. It is the one thing
+    here that can fail, and it fails the way a bug should: there is no model
+    behind this answer to hand a malformed date back to.
+
+    Args:
+        ctx: The run context, carrying this delegation's own step id.
+        lines: The requested lines. Anything at all here and there is work.
+        as_of_date: The date the request arrived, as `YYYY-MM-DD`.
+
+    Returns:
+        The canonical envelope with an empty payload, or `None` if there are
+        lines to resolve.
+    """
+    if lines:
+        return None
+    return InventoryResponse(
+        agent=AgentName.INVENTORY,
+        step_id=ctx.deps.current_step_id,
+        request_id=ctx.deps.request_id,
+        customer=InventoryCustomerPayload(resolved_lines=[], restock_needs=[]),
+        internal=InventoryInternalPayload(
+            as_of_date=as_of_date, stock_facts=[], traces=[], signals=[]
+        ),
+    )
+
+
 @orchestrator_agent.tool
-@delegation(AgentName.INVENTORY)
+@delegation(AgentName.INVENTORY, when_empty=_nothing_to_resolve)
 async def consult_inventory(
     ctx: RunContext[AgentDeps],
     lines: list[RequestedLine],
@@ -198,8 +245,44 @@ async def consult_inventory(
     )
 
 
+def _nothing_to_price(
+    ctx: RunContext[AgentDeps], lines: list[ResolvedLine], as_of_date: str
+) -> QuotingResponse | None:
+    """Quoting's answer to a delegation with no lines in it, or `None` if it has.
+
+    The one this defect was measured on: the orchestrator split an enquiry
+    across several inventory calls and then consulted quoting twice, the second
+    time with nothing in the call. Nothing priced is a quote of nought, and no
+    row is written to the registry — a quote nobody asked for is not part of
+    the business's rejection history.
+
+    `as_of_date` decides nothing here: it stamps the registry rows, and there
+    are none.
+
+    Args:
+        ctx: The run context, carrying this delegation's own step id.
+        lines: The resolved lines. Anything at all here and there is work.
+        as_of_date: The date the request arrived, as `YYYY-MM-DD`.
+
+    Returns:
+        The canonical envelope with an empty payload, or `None` if there are
+        lines to price.
+    """
+    if lines:
+        return None
+    return QuotingResponse(
+        agent=AgentName.QUOTING,
+        step_id=ctx.deps.current_step_id,
+        request_id=ctx.deps.request_id,
+        customer=QuotingCustomerPayload(quoted_lines=[], quote_total=0.0),
+        internal=QuotingInternalPayload(
+            precedents=[], quote_rows_written=[], signals=[]
+        ),
+    )
+
+
 @orchestrator_agent.tool
-@delegation(AgentName.QUOTING)
+@delegation(AgentName.QUOTING, when_empty=_nothing_to_price)
 async def consult_quoting(
     ctx: RunContext[AgentDeps],
     lines: list[ResolvedLine],
@@ -262,6 +345,21 @@ async def place_order(
         raise ModelRetry(
             "This order has already been placed. Write the reply from the "
             "answer you were given; do not place it again."
+        )
+    if not lines:
+        # An order with no lines in it is an order of nought, and it is a
+        # non-event: nothing is committed, nothing is bought, no deadline is
+        # recorded against the request, and the order desk has not been
+        # through. The delegations' `when_empty` guard makes the same answer
+        # one level down; this one is here because the sequence below would
+        # otherwise ask sales to commit a list it was never given, which is
+        # where #40 sends a model looking for lines to invent.
+        return PlacedOrder(
+            committed=[],
+            declined=[],
+            order_total=0.0,
+            promised_delivery_date=None,
+            blockers=[],
         )
     # Recorded here because this is where the deadline is first stated, and it
     # belongs to the request rather than to this step: a suspension persists it

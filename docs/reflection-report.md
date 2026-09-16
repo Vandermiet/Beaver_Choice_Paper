@@ -461,9 +461,10 @@ shortfall is its decision to own, and replenishment could not recover the
 arithmetic because neither the stock reading nor the requested quantity crosses
 the seam — deliberately so.
 
-**2. Give an empty delegation an answer instead of a model.** One of 71
-delegations in this run errored, and it took a request down with it: the
-orchestrator called `consult_quoting` a second time with no lines, the model
+**2. Give an empty delegation an answer instead of a model.** *(Done since
+this run, on #40.)* One of 71 delegations in this run errored, and it took a
+request down with it: the orchestrator called `consult_quoting` a second time
+with no lines, the model
 invented line ids to fill the gap, `CarriedItemName` correctly refused each one,
 and three refusals exhausted the retry budget —
 `UnexpectedModelBehavior: Tool 'catalogue_price' exceeded max retries count of
@@ -472,9 +473,12 @@ orchestrator's instructions already say to call quoting once; an instruction is
 one model turn from being ignored, which is precisely the argument the commit
 guard is built on. A delegation called with an empty line list has a correct
 answer that needs no model — the canonical envelope, empty payload, no signals
-— and returning it at the seam would cost nothing, could not loop, and would
-turn a lost request into a non-event. The same hole exists on `consult_inventory`
-and `place_order`; they were simply never called empty here.
+— and it is now returned at the seam: `@delegation` takes a `when_empty`
+answer, and a delegation that has one never reaches its agent. It costs
+nothing, cannot loop, and turns a lost request into a non-event that the trail
+still records as a step. The same hole existed on `consult_inventory` and
+`place_order` — they were simply never called empty here — and both are closed
+the same way.
 
 **3. Survive the proxy.** Request 4 was lost to
 `429 GenAI Gateway Limit (50 calls parallel)` on its very first model call —

@@ -606,7 +606,19 @@ def _with_step_id(ctx: RunContext[AgentDeps], step_id: str) -> RunContext[AgentD
     return replace(ctx, deps=replace(ctx.deps, current_step_id=step_id))
 
 
-def delegation(agent: AgentName, name: str | None = None):
+#: What a delegation answers with when it was handed nothing to do, built
+#: without a model call. The seam calls it with the delegation's own arguments —
+#: a `ctx` carrying this step's id, then whatever the delegation takes — and it
+#: returns `None` when there is work to do. The predicate and the answer are one
+#: function because they are one decision, and because "empty" is a fact about
+#: a particular delegation's own arguments: what the seam holds is that the
+#: question gets asked, not what the answer to it is.
+EmptyEnvelope = Callable[..., AgentResponse | None]
+
+
+def delegation(
+    agent: AgentName, name: str | None = None, *, when_empty: EmptyEnvelope | None = None
+):
     """Make an orchestrator tool that delegates, logs itself, and cannot leak.
 
     The decorated function does one thing — `await sub_agent.run(..., deps=
@@ -623,9 +635,16 @@ def delegation(agent: AgentName, name: str | None = None):
     so the sidecar is the only record of them — and writing them here would have
     been correct either way.
 
+    A delegation handed nothing to do never reaches its agent. That guard lives
+    here rather than in the decorated function because the function's contract
+    is to return an `AgentRunResult` — it has no way to answer without running a
+    model, which is exactly the thing there is no reason to run.
+
     Args:
         agent: The agent being delegated to.
         name: The step's name in the trail. Defaults to the agent's name.
+        when_empty: What to answer when this delegation has nothing to do, or
+            `None` to have no such answer and always run the agent.
 
     Returns:
         A decorator turning `(ctx, ...) -> AgentRunResult[AgentResponse]` into
@@ -656,9 +675,23 @@ def delegation(agent: AgentName, name: str | None = None):
                 # concurrently, so one mutable field is two delegations writing
                 # to one slot — issue #38, which cost the ticket 109 evaluation
                 # two of its twenty requests.
-                result = await fn(_with_step_id(ctx, step.step_id), *args, **kwargs)
+                sub_ctx = _with_step_id(ctx, step.step_id)
 
-                response = result.output
+                # A delegation with nothing in it has a correct answer that
+                # needs no model at all: the canonical envelope with an empty
+                # payload and no signals. Structural for the reason
+                # `place_order`'s own guard is — the orchestrator's instructions
+                # already say to consult each colleague once and to skip a step
+                # with nothing to do, and an instruction is one model turn from
+                # being ignored. Run the agent anyway and it is asked to work on
+                # a list it cannot see, so it invents one; every invented name
+                # is refused by `CarriedItemName`, each refusal comes back as a
+                # retry, and three of them end the request. That is #40, and it
+                # cost the ticket 109 evaluation run one of its twenty requests.
+                empty = when_empty(sub_ctx, *args, **kwargs) if when_empty else None
+                result = None if empty is not None else await fn(sub_ctx, *args, **kwargs)
+
+                response = empty if empty is not None else result.output
                 if response.step_id != step.step_id:
                     # The orchestrator mints the id and the agent echoes it
                     # back; a disagreement would silently split one step across
@@ -675,7 +708,13 @@ def delegation(agent: AgentName, name: str | None = None):
                     # call site here remembering to add it.
                     deps.cash.observe(response.internal)
                 trail.write_blockers(step.step_id, response.internal.signals)
-                trail.write_transcript(step.step_id, result.new_messages())
+                if result is not None:
+                    # An empty delegation writes no transcript line, because no
+                    # model ran and there are no messages to write. The
+                    # `agent_steps` row is there all the same: the orchestrator
+                    # asked, and what it asked is worth a row even when the
+                    # answer needed nobody.
+                    trail.write_transcript(step.step_id, result.new_messages())
 
             # Two narrowings, and the orchestrator is on the far side of
             # both: `to_view` drops the internal payload, and the journal drops

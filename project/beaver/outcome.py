@@ -162,6 +162,17 @@ class RequestJournal:
         return [blocker for view in self.views for blocker in view.blockers]
 
     @property
+    def order_placed(self) -> bool:
+        """Whether this request has already been through the order desk.
+
+        The guard on the one tool that cannot be called twice: a second
+        commitment sequence would offer lines we have already sold.
+        """
+        return any(
+            isinstance(view.customer, SalesCustomerPayload) for view in self.views
+        )
+
+    @property
     def restock_needs(self) -> list[RestockNeed]:
         """Every shortfall inventory measured, in the order it measured them.
 

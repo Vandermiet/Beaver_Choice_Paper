@@ -35,12 +35,11 @@ Four boundaries this module exists to hold:
 """
 
 import functools
-import json
 import logging
 from datetime import date
 
 from pydantic import BaseModel
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.usage import UsageLimits
 
 from beaver.audit import AgentDeps, AuditTrail, delegation, new_run_id
@@ -114,8 +113,9 @@ came to. A line it could not commit comes back with one more blocker:
   hold or how short we are, and never offer a partial quantity: the line was
   declined whole.
 - `deadline_unmeetable` — we could have got it, but not by the date they need
-  it. Say that we cannot meet that date for the line and name the date we could
-  have met, so they can decide whether to move it.
+  it. Say that we cannot supply that line by the date they gave, and ask
+  whether a later date would suit. You were given no alternative date, so do
+  not name one: a date we have not promised is a date we cannot keep.
 
 Skip this step only when nothing was priced. Never call it twice: it makes its
 own second attempt, and a second call would sell the same line again.
@@ -254,6 +254,15 @@ async def place_order(
         came to.
     """
     deps = ctx.deps
+    if deps.journal.order_placed:
+        # Structural rather than instructed. The instructions say to call this
+        # once, and an instruction is one model turn away from a second sale of
+        # a line we have already written to `transactions` — which nothing in
+        # this database can undo.
+        raise ModelRetry(
+            "This order has already been placed. Write the reply from the "
+            "answer you were given; do not place it again."
+        )
     # Recorded here because this is where the deadline is first stated, and it
     # belongs to the request rather than to this step: a suspension persists it
     # as part of the enquiry as it arrived.
@@ -321,27 +330,28 @@ async def _commit(
         lines: The priced lines to offer for commitment.
         as_of_date: The date the request arrived, as `YYYY-MM-DD`.
         availability: When stock bought in for this request reaches us, by item
-            name. `None` on pass 1, when nothing has been bought.
+            name. `None` on pass 1, when nothing has been bought. It is
+            routed on the deps rather than into the prompt, so no model stands
+            between replenishment's date and the promise made from it.
 
     Returns:
         Sales' envelope, for the seam to narrow.
     """
-    prompt = _ask("Commit what we can of these priced lines", lines, as_of_date)
-    if availability:
-        # One line, and the JSON at the end of it: the lines above travel as
-        # one JSON object per line, so a bare object here would read as another
-        # line of the order.
-        prompt += (
-            "\n\nWe have bought stock in for this request. Pass these back as "
-            "the availability dates, unchanged: "
-            + json.dumps({item: day.isoformat() for item, day in availability.items()})
+    deps = ctx.deps
+    # Routed on the deps rather than in the prompt, and restored afterwards for
+    # the same reason `current_step_id` is: one request's deps outlive one
+    # delegation. Sales' output function reads it there, so the date we promise
+    # goods we do not yet hold is never a date a model retyped.
+    deps.earliest_availability = availability or {}
+    try:
+        return await sales_agent.run(
+            _ask("Commit what we can of these priced lines", lines, as_of_date),
+            deps=deps,
+            usage=ctx.usage,
+            model=shared_model(),
         )
-    return await sales_agent.run(
-        prompt,
-        deps=ctx.deps,
-        usage=ctx.usage,
-        model=shared_model(),
-    )
+    finally:
+        deps.earliest_availability = {}
 
 
 @delegation(AgentName.REPLENISHMENT)
@@ -457,10 +467,6 @@ async def handle_request(
             usage_limits=REQUEST_BUDGET,
         )
         outcome = derive_outcome(deps.journal)
-        # Written before the outcome is returned and after every pass has run:
-        # this is the only moment at which the whole of what one request did to
-        # the books is known, and the only component that knows it.
-        run_trail.write_cash(deps.request_id, deps.cash)
         token = None
         if outcome is Outcome.PENDING_CUSTOMER_REVISION:
             flow = suspend(
@@ -483,6 +489,12 @@ async def handle_request(
             customer_message=APOLOGY,
             resume_token=None,
         )
+    finally:
+        # In a `finally` because money that moved before a crash moved all the
+        # same: a request that sold a line and then fell over is exactly the
+        # one an auditor needs the row for, and it is the one path on which a
+        # write at the end of the happy branch would never run.
+        run_trail.write_cash(deps.request_id, deps.cash)
     return RequestResolution(
         request_id=str(request_id),
         outcome=outcome,

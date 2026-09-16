@@ -19,14 +19,8 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_core import to_jsonable_python
 from sqlalchemy import text
 
-from tests.messages import (
-    NEEDS,
-    PRICED,
-    RESOLVED,
-    availability_handed_down,
-    handed_down,
-    handed_up,
-)
+from tests.messages import PRICED, RESOLVED, handed_down, handed_up, returned
+from tests.turns import replenishment_turn
 
 from beaver import orchestrator, starter
 from beaver.contract import (
@@ -472,7 +466,7 @@ def scripted_request(lines, as_of_date: str = REQUEST_DATE):
         if "snapshot_financials" in names:
             return _sales_turn(messages, as_of_date)
         if "reorder_thresholds" in names:
-            return _replenishment_turn(messages)
+            return replenishment_turn(messages)
         return _inventory_turn(messages, stated, as_of_date)
 
     return FunctionModel(model)
@@ -564,26 +558,9 @@ def _sales_turn(messages, as_of_date: str) -> ModelResponse:
                 )
             ]
         )
-    final = {"lines": quoted, "as_of_date": as_of_date}
-    availability = availability_handed_down(messages)
-    if availability:
-        final["earliest_availability"] = availability
-    return ModelResponse(parts=[ToolCallPart("final_result", final)])
-
-
-def _replenishment_turn(messages) -> ModelResponse:
-    [request] = handed_down(messages, NEEDS)
-    if len(messages) == 1:
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    "reorder_thresholds",
-                    {"item_names": sorted({need["item_name"] for need in request["needs"]})},
-                ),
-                ToolCallPart("cash_available", {"as_of_date": request["request_date"]}),
-            ]
-        )
-    return ModelResponse(parts=[ToolCallPart("final_result", {"request": request})])
+    return ModelResponse(
+        parts=[ToolCallPart("final_result", {"lines": quoted, "as_of_date": as_of_date})]
+    )
 
 
 #: What the orchestrator's instructions ask it to ask, by code. A stand-in for
@@ -616,7 +593,7 @@ def a_letter(messages, stated) -> str:
         The letter.
     """
     said_as = {line["line_id"]: line["item_as_stated"] for line in stated}
-    sales = handed_up(messages, "place_order")
+    sales = returned(messages, "place_order")
     sentences = [
         f"{line['units']} units of {line['item_name']} for ${line['line_total']:.2f}"
         for line in sales.get("committed", [])

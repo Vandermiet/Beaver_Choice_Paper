@@ -23,29 +23,32 @@ So a 500-unit `A4 paper` line is short by 228 and restocks 363 units, and a
 500-unit `Cardstock` line commits off the shelf.
 """
 
+import inspect
 import json
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
+from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy import text
 
-from tests.messages import (
-    NEEDS,
-    PRICED,
-    RESOLVED,
-    availability_handed_down,
-    handed_down,
-    handed_up,
-)
+from tests.messages import PRICED, RESOLVED, handed_down, handed_up, returned
+from tests.turns import replenishment_turn
 
 from beaver import orchestrator, starter
-from beaver.audit import RequestCash
-from beaver.contract import BlockerCode, CustomerBlocker, Outcome
+from beaver.audit import AgentDeps, RequestCash
+from beaver.contract import (
+    AgentName,
+    AgentView,
+    BlockerCode,
+    CustomerBlocker,
+    Outcome,
+)
 from beaver.inventory.agent import inventory_agent
 from beaver.inventory.models import RestockNeed
-from beaver.orchestrator import orchestrator_agent
+from beaver.orchestrator import orchestrator_agent, place_order
 from beaver.quoting.agent import quoting_agent
 from beaver.quoting.tools import price_line, price_of
 from beaver.replenishment.agent import replenishment_agent
@@ -57,7 +60,7 @@ from beaver.retry import (
     merge_passes,
     restocks_for,
 )
-from beaver.sales.agent import sales_agent
+from beaver.sales.agent import build_sales_response, sales_agent
 from beaver.sales.models import (
     CommittedLine,
     DeclinedLine,
@@ -295,8 +298,12 @@ class TestTheMerge:
 # The sequence, under a scripted model.
 # --------------------------------------------------------------------------
 
+#: Two of our products fit "banner paper", so inventory refuses the line and
+#: asks which was meant. Nothing about it reaches the order desk.
+AMBIGUOUS = "banner paper"
+
 #: What a customer says for the items these tests order.
-_AS_STATED = {SHORT: "printer paper", IN_STOCK: "cardstock"}
+_AS_STATED = {SHORT: "printer paper", IN_STOCK: "cardstock", AMBIGUOUS: AMBIGUOUS}
 
 
 def scripted_flow(lines, deadline: str | None, as_of_date: str = REQUEST_DATE):
@@ -317,16 +324,6 @@ def scripted_flow(lines, deadline: str | None, as_of_date: str = REQUEST_DATE):
         }
         for line_id, item_name, units in lines
     ]
-    resolved = [
-        {
-            "line_id": line_id,
-            "item_name": item_name,
-            "category": "paper",
-            "quantity": units,
-        }
-        for line_id, item_name, units in lines
-    ]
-
     def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         names = {tool.name for tool in info.function_tools}
         if "consult_inventory" in names:
@@ -339,7 +336,8 @@ def scripted_flow(lines, deadline: str | None, as_of_date: str = REQUEST_DATE):
                         )
                     ]
                 )
-            if len(messages) == 3:
+            resolved = handed_up(messages, "consult_inventory").get("resolved_lines", [])
+            if len(messages) == 3 and resolved:
                 return ModelResponse(
                     parts=[
                         ToolCallPart(
@@ -348,7 +346,7 @@ def scripted_flow(lines, deadline: str | None, as_of_date: str = REQUEST_DATE):
                         )
                     ]
                 )
-            if len(messages) == 5:
+            if len(messages) == 5 and resolved:
                 return ModelResponse(
                     parts=[
                         ToolCallPart(
@@ -364,7 +362,7 @@ def scripted_flow(lines, deadline: str | None, as_of_date: str = REQUEST_DATE):
                     ]
                 )
             return ModelResponse(
-                parts=[TextPart(a_letter(handed_up(messages, "place_order")))]
+                parts=[TextPart(a_letter(returned(messages, "place_order")))]
             )
         if "catalogue_price" in names:
             if len(messages) == 1:
@@ -372,7 +370,12 @@ def scripted_flow(lines, deadline: str | None, as_of_date: str = REQUEST_DATE):
                     parts=[
                         ToolCallPart(
                             "catalogue_price",
-                            {"item_names": [line["item_name"] for line in resolved]},
+                            {
+                                "item_names": [
+                                    line["item_name"]
+                                    for line in handed_down(messages, RESOLVED)
+                                ]
+                            },
                         )
                     ]
                 )
@@ -399,32 +402,15 @@ def scripted_flow(lines, deadline: str | None, as_of_date: str = REQUEST_DATE):
                         )
                     ]
                 )
-            final = {"lines": quoted, "as_of_date": as_of_date}
-            availability = availability_handed_down(messages)
-            if availability:
-                final["earliest_availability"] = availability
-            return ModelResponse(parts=[ToolCallPart("final_result", final)])
-        if "reorder_thresholds" in names:
-            [request] = handed_down(messages, NEEDS)
-            if len(messages) == 1:
-                return ModelResponse(
-                    parts=[
-                        ToolCallPart(
-                            "reorder_thresholds",
-                            {
-                                "item_names": sorted(
-                                    {need["item_name"] for need in request["needs"]}
-                                )
-                            },
-                        ),
-                        ToolCallPart(
-                            "cash_available", {"as_of_date": request["request_date"]}
-                        ),
-                    ]
-                )
             return ModelResponse(
-                parts=[ToolCallPart("final_result", {"request": request})]
+                parts=[
+                    ToolCallPart(
+                        "final_result", {"lines": quoted, "as_of_date": as_of_date}
+                    )
+                ]
             )
+        if "reorder_thresholds" in names:
+            return replenishment_turn(messages)
         if len(messages) == 1:
             return ModelResponse(
                 parts=[
@@ -507,9 +493,12 @@ def cash_row() -> dict | None:
     return dict(found[0]._mapping) if found else None
 
 
-class TestTheFullSequence:
-    """A request with one line short of stock commits its other lines, buys the
-    stock it was short of, and commits the short line on a second pass."""
+class Flow:
+    """The harness call, under a scripted model, on a trail of its own.
+
+    Inherited rather than repeated: every class below drives the same request
+    through the same five agents and differs only in what it then asserts.
+    """
 
     @pytest.fixture(autouse=True)
     def wired(self, trail, monkeypatch):
@@ -531,6 +520,11 @@ class TestTheFullSequence:
                 request_date=REQUEST_DATE,
                 request_id=1,
             )
+
+
+class TestTheFullSequence(Flow):
+    """A request with one line short of stock commits its other lines, buys the
+    stock it was short of, and commits the short line on a second pass."""
 
     async def test_the_stocked_line_sells_on_pass_one_and_the_short_line_on_pass_two(self):
         resolution = await self.handle([("L1", SHORT, 500), ("L2", IN_STOCK, 500)])
@@ -631,6 +625,43 @@ class TestTheFullSequence:
 
 
 
+class TestWhatTheModelCannotTouch(Flow):
+    """The two things the sequence refuses to leave to a model."""
+
+    def test_sales_is_never_handed_the_date_it_promises_from(self):
+        """It reaches the output function on the deps. A model that dropped or
+        moved it would promise goods that are not in the building for today."""
+        assert "earliest_availability" not in inspect.signature(
+            build_sales_response
+        ).parameters
+
+    async def test_a_restocked_line_is_still_promised_its_arrival_date(self):
+        """The other half of the claim: routing it around the model did not
+        lose it."""
+        arrival = restock_arrival_date(date.fromisoformat(REQUEST_DATE), RESTOCK_UNITS)
+        resolution = await self.handle([("L1", SHORT, 500)])
+        assert f"delivered on {arrival.isoformat()}" in resolution.customer_message
+
+    async def test_the_order_desk_refuses_a_second_call(self, trail):
+        """The instructions say to call `place_order` once. An instruction is
+        one model turn away from selling a line we have already written."""
+        deps = AgentDeps(trail=trail, request_id="1")
+        deps.journal.views = [_a_sales_view()]
+        with pytest.raises(ModelRetry):
+            await place_order(SimpleNamespace(deps=deps, usage=None), [], REQUEST_DATE)
+
+
+def _a_sales_view() -> AgentView[SalesCustomerPayload]:
+    """A journal that has already been through the order desk."""
+    return AgentView[SalesCustomerPayload](
+        agent=AgentName.SALES,
+        step_id=STEP_ID,
+        request_id="1",
+        customer=a_pass(),
+        blockers=[],
+    )
+
+
 class TestTheMeasurementItself:
     """The pair of readings the seam collects, without a database or a model."""
 
@@ -665,17 +696,9 @@ class TestTheMeasurementItself:
         assert cash.observed and cash.delta == 0.0
 
 
-class TestWhenTheRestockIsRefused:
+class TestWhenTheRestockIsRefused(Flow):
     """A line we could have got but not in time keeps its true reason, and no
     request ends cash-negative."""
-
-    @pytest.fixture(autouse=True)
-    def wired(self, trail, monkeypatch):
-        monkeypatch.setenv("UDACITY_OPENAI_API_KEY", "not-used-under-a-scripted-model")
-        monkeypatch.setattr(orchestrator, "trail", lambda: trail)
-        return trail
-
-    handle = TestTheFullSequence.handle
 
     async def test_a_late_restock_buys_nothing_at_all(self):
         """Not even the floor portion: a purchase sized by the threshold alone
@@ -710,6 +733,26 @@ class TestWhenTheRestockIsRefused:
         assert resolution.outcome is Outcome.PARTIALLY_FULFILLED
         assert [row["item_name"] for row in rows("sales")] == [IN_STOCK]
 
+    async def test_a_request_that_bought_nothing_can_still_suspend(self):
+        """The door ticket 106 left open, from the other side: suspension is
+        reachable only before money moves, and a refused restock moved none —
+        so the ambiguous line beside it is still a question we may ask."""
+        resolution = await self.handle(
+            [("L1", SHORT, 500), ("L2", AMBIGUOUS, 200)], deadline=UNMEETABLE
+        )
+        assert resolution.outcome is Outcome.PENDING_CUSTOMER_REVISION
+        assert resolution.resume_token is not None
+
+    async def test_the_suspended_flow_carries_the_deadline_it_was_given(self):
+        """Read out of the customer's prose by the orchestrator and recorded at
+        the one step that needs it, so a resumption knows the date to beat."""
+        await self.handle(
+            [("L1", SHORT, 500), ("L2", AMBIGUOUS, 200)], deadline=UNMEETABLE
+        )
+        with starter.engine().connect() as conn:
+            payload = conn.execute(text("SELECT payload FROM suspended_flows")).scalar_one()
+        assert json.loads(payload)["original_request"]["deadline"] == UNMEETABLE
+
     async def test_the_request_does_not_end_cash_negative(self):
         before = read_cash(REQUEST_DATE)
         await self.handle(
@@ -718,25 +761,25 @@ class TestWhenTheRestockIsRefused:
         assert read_cash(REQUEST_DATE) >= before
 
 
-class TestTheRetryIsBounded:
+class TestTheRetryIsBounded(Flow):
     """Exactly one second attempt, so a request terminates rather than looping."""
 
     @pytest.fixture(autouse=True)
-    def wired(self, trail, monkeypatch):
-        monkeypatch.setenv("UDACITY_OPENAI_API_KEY", "not-used-under-a-scripted-model")
-        monkeypatch.setattr(orchestrator, "trail", lambda: trail)
-        # A purchase that covers one unit of the shortfall, so the line reaching
-        # pass 2 is still short. The branch is an invariant guard expected at
-        # zero — the restock is sized to cover the shortfall exactly — and this
-        # is what makes "it declines rather than retrying again" testable.
+    def undersized_restock(self, monkeypatch):
+        """A purchase that covers one unit of the shortfall.
+
+        So the line reaching pass 2 is still short. That branch is an invariant
+        guard expected at zero — a restock is sized to cover the shortfall
+        exactly — and undersizing it is what makes "the line declines rather
+        than being retried again" testable at all.
+        """
         from beaver.replenishment import tools as replenishment_tools
 
         monkeypatch.setattr(
-            replenishment_tools, "order_quantity", lambda shortfall_units, min_stock_level: 1
+            replenishment_tools,
+            "order_quantity",
+            lambda shortfall_units, min_stock_level: 1,
         )
-        return trail
-
-    handle = TestTheFullSequence.handle
 
     async def test_a_line_still_short_after_pass_two_is_declined_not_retried(self):
         resolution = await self.handle([("L1", SHORT, 500), ("L2", IN_STOCK, 500)])

@@ -25,7 +25,7 @@ import itertools
 import json
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -528,7 +528,7 @@ class RequestCash:
         Returns:
             The last reading less the first, or nought if nothing weighed it.
         """
-        if not self.observed:
+        if self.before is None or self.after is None:
             return 0.0
         return round(self.after - self.before, 2)
 
@@ -566,6 +566,13 @@ class AgentDeps:
     #: reason: a measurement a call site can forget is one that reports nought
     #: for a request that moved thousands.
     cash: RequestCash = field(default_factory=RequestCash)
+    #: When stock bought in for this request reaches us, by item name. The one
+    #: thing the orchestrator routes *into* a delegation rather than around it,
+    #: and it travels here rather than through the prompt because a delivery
+    #: promise must be exact: a date the model paraphrased, dropped or moved
+    #: would promise goods that are not in the building. Empty on a first pass
+    #: and for any agent that never buys anything in.
+    earliest_availability: dict[str, date] = field(default_factory=dict)
 
 
 def delegation(agent: AgentName, name: str | None = None):

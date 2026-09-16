@@ -28,10 +28,25 @@ def handed_up(messages: list[Any], tool_name: str) -> dict:
         tool_name: The delegation tool whose return to read.
 
     Returns:
-        The customer half of what that delegation handed up, or `{}`. A tool
-        that is not a bare delegation — `place_order`, which drives three of
-        them and merges the answer — has no customer half to unwrap, so what it
-        returned comes back whole.
+        The customer half of what that delegation handed up, or `{}`.
+    """
+    payload = returned(messages, tool_name)
+    return payload.get("customer", {})
+
+
+def returned(messages: list[Any], tool_name: str) -> dict:
+    """Whatever one of the orchestrator's tools handed back, whole.
+
+    `handed_up` unwraps a delegation's envelope; this does not, because not
+    every tool returns one — `place_order` drives three delegations and merges
+    the answer into a shape of its own.
+
+    Args:
+        messages: The orchestrator's messages so far.
+        tool_name: The tool whose return to read.
+
+    Returns:
+        What that tool returned, or `{}`.
     """
     for message in reversed(messages):
         for part in getattr(message, "parts", []):
@@ -39,7 +54,7 @@ def handed_up(messages: list[Any], tool_name: str) -> dict:
                 continue
             payload = to_jsonable_python(getattr(part, "content", None))
             if isinstance(payload, dict):
-                return payload.get("customer", payload)
+                return payload
     return {}
 
 
@@ -75,24 +90,3 @@ RESOLVED = '"item_name"'
 PRICED = '"quote_line_id"'
 #: The field a shortfall carries, so it marks the prompt replenishment reads.
 NEEDS = '"shortfall_units"'
-
-#: How a pass-2 commitment prompt introduces the stock we bought in. The dates
-#: follow it on the same line, so they never read as another line of the order.
-BOUGHT_IN = "Pass these back as the availability dates, unchanged: "
-
-
-def availability_handed_down(messages: list[Any]) -> dict:
-    """The arrival dates a pass-2 commitment prompt carried, by item name.
-
-    Args:
-        messages: The delegate's messages so far.
-
-    Returns:
-        The dates, or `{}` on a first pass, where nothing was bought.
-    """
-    for message in reversed(messages):
-        for part in getattr(message, "parts", []):
-            content = getattr(part, "content", None)
-            if isinstance(content, str) and BOUGHT_IN in content:
-                return json.loads(content.split(BOUGHT_IN, 1)[1])
-    return {}

@@ -20,13 +20,8 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_core import to_jsonable_python
 from sqlalchemy import text
 
-from tests.messages import (
-    NEEDS,
-    PRICED,
-    availability_handed_down,
-    handed_down,
-    handed_up,
-)
+from tests.messages import PRICED, handed_down, handed_up, returned
+from tests.turns import replenishment_turn
 
 from beaver import ledger, orchestrator, starter
 from beaver.audit import AgentDeps
@@ -202,19 +197,16 @@ class TestTheOrderTotal:
         assert quote_total([]) == 0.0
 
 
-def scripted_sales(lines, as_of_date: str = REQUEST_DATE, availability=None):
+def scripted_sales(lines, as_of_date: str = REQUEST_DATE):
     """The model sales runs under: one snapshot, then the lines back unchanged.
 
     Sales' model has no judgement to exercise — every number in the envelope is
     read or computed after it returns — so the script is the shortest one in
-    the suite, and that is the point rather than a shortcut.
+    the suite, and that is the point rather than a shortcut. The arrival dates
+    of stock we bought in are not in it at all: they reach sales on the deps,
+    where no model can drop or move them.
     """
-    payload = to_jsonable_python(lines)
-    final = {"lines": payload, "as_of_date": as_of_date}
-    if availability is not None:
-        final["earliest_availability"] = {
-            item: day.isoformat() for item, day in availability.items()
-        }
+    final = {"lines": to_jsonable_python(lines), "as_of_date": as_of_date}
 
     def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         if len(messages) == 1:
@@ -235,9 +227,14 @@ def scripted_sales(lines, as_of_date: str = REQUEST_DATE, availability=None):
 
 
 async def sell(lines, trail, as_of_date: str = REQUEST_DATE, availability=None):
-    """Run sales on its own, with the step id the seam would have minted."""
-    deps = AgentDeps(trail=trail, request_id="1", current_step_id=STEP_ID)
-    with sales_agent.override(model=scripted_sales(lines, as_of_date, availability)):
+    """Run sales on its own, with the step id and the dates the seam would route."""
+    deps = AgentDeps(
+        trail=trail,
+        request_id="1",
+        current_step_id=STEP_ID,
+        earliest_availability=availability or {},
+    )
+    with sales_agent.override(model=scripted_sales(lines, as_of_date)):
         result = await sales_agent.run("commit these", deps=deps)
     return result.output
 
@@ -626,7 +623,7 @@ def scripted_flow(lines, as_of_date: str = REQUEST_DATE, seen: list | None = Non
                         )
                     ]
                 )
-            return ModelResponse(parts=[TextPart(a_letter(handed_up(messages, "place_order")))])
+            return ModelResponse(parts=[TextPart(a_letter(returned(messages, "place_order")))])
         if "catalogue_price" in tools:
             if len(messages) == 1:
                 return ModelResponse(
@@ -659,32 +656,15 @@ def scripted_flow(lines, as_of_date: str = REQUEST_DATE, seen: list | None = Non
                         )
                     ]
                 )
-            final = {"lines": quoted, "as_of_date": as_of_date}
-            availability = availability_handed_down(messages)
-            if availability:
-                final["earliest_availability"] = availability
-            return ModelResponse(parts=[ToolCallPart("final_result", final)])
-        if "reorder_thresholds" in tools:
-            [request] = handed_down(messages, NEEDS)
-            if len(messages) == 1:
-                return ModelResponse(
-                    parts=[
-                        ToolCallPart(
-                            "reorder_thresholds",
-                            {
-                                "item_names": sorted(
-                                    {need["item_name"] for need in request["needs"]}
-                                )
-                            },
-                        ),
-                        ToolCallPart(
-                            "cash_available", {"as_of_date": request["request_date"]}
-                        ),
-                    ]
-                )
             return ModelResponse(
-                parts=[ToolCallPart("final_result", {"request": request})]
+                parts=[
+                    ToolCallPart(
+                        "final_result", {"lines": quoted, "as_of_date": as_of_date}
+                    )
+                ]
             )
+        if "reorder_thresholds" in tools:
+            return replenishment_turn(messages)
         if len(messages) == 1:
             return ModelResponse(
                 parts=[

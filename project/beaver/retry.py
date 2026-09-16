@@ -136,23 +136,26 @@ def merge_passes(
     Returns:
         The merged order, with the blocker now standing on each declined line.
     """
-    committed = [*first.committed, *(second.committed if second else [])]
-    filled = {line.line_id for line in (second.committed if second else [])}
+    # An empty pass rather than a `None` to test four times over: a request
+    # that never went short is a request whose second pass sold nothing, and
+    # the merge is the same arithmetic either way.
+    retried = second or SalesCustomerPayload(
+        committed=[], declined=[], order_total=0.0, promised_delivery_date=None
+    )
+
+    committed = [*first.committed, *retried.committed]
+    filled = {line.line_id for line in retried.committed}
 
     declined = [line for line in first.declined if line.line_id not in filled]
     already = {line.line_id for line in declined}
-    declined += [
-        line
-        for line in (second.declined if second else [])
-        if line.line_id not in already
-    ]
+    declined += [line for line in retried.declined if line.line_id not in already]
 
     return PlacedOrder(
         committed=committed,
         declined=declined,
         # Rounded because two passes' totals are two sums of cents, and the
         # letter states this figure to the cent.
-        order_total=round(first.order_total + (second.order_total if second else 0.0), 2),
+        order_total=round(first.order_total + retried.order_total, 2),
         promised_delivery_date=max(
             (line.promised_delivery_date for line in committed), default=None
         ),

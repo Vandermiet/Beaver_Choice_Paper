@@ -6,12 +6,12 @@ requests, in date order, through the design locked at #10.
 **Method.** Resolution decisions (which catalogue item a line means) are made by
 hand under #6's four rules — that is the LLM's job in the real system and the
 only part of the walk a script cannot honestly stand in for. Everything
-downstream of resolution is *computed*, not estimated: `research/rubric-dry-run.py`
+downstream of resolution is *computed*, not estimated: `docs/research/rubric-dry-run.py`
 seeds a throwaway `munder_difflin.db` at seed 137 and drives the real starter
 helpers (`get_stock_level`, `get_supplier_delivery_date`, `create_transaction`,
 `get_cash_balance`, `generate_financial_report`), so stock depletes across
 requests and cash moves exactly as it would at run time. Full output in
-`research/rubric-dry-run-trace.txt`.
+`docs/research/rubric-dry-run-trace.txt`.
 
 This matters: every earlier prediction on the map was made per-request, against
 the *seeded* stock table. Stock is transaction-derived and cumulative, so the

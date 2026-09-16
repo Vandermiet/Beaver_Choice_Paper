@@ -117,8 +117,10 @@ class RestockPlan(BaseModel):
     be comparisons rather than attempts.
 
     **One plan per item, not per need.** Two lines of one request can resolve
-    to the same product — "printer paper" and "copy paper" are both `A4 paper` —
-    and inventory emits a `RestockNeed` per line. Buying per need would buy the
+    to the same product — "printer paper" and "copy paper" are both `A4 paper`.
+    Inventory measures its shortfall per item for the same reason (#36), so a
+    request yields one need per item; grouping again here is what keeps that
+    true of a batch that names an item twice. Buying per need would buy the
     floor twice for one item, which is not what a target stock level is, and
     would collide in every `*_by_item` field of the internal payload. A
     purchase is a thing we do with a supplier about a product, so that is what

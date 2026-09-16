@@ -102,7 +102,7 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Shortfall** — The units by which a requested line exceeds the stock held for that item. What the restock must at minimum cover. Inventory alone computes it; replenishment consumes it and never re-derives it from a stock reading of its own, because that would be two agents answering the same question.
 
-**Restock need** — A shortfall as it travels: the line, the item, and the units short. The one thing inventory passes through the orchestrator to replenishment. It carries the shortfall rather than the stock reading it was derived from, so what we hold is never routed anywhere it is not needed, and replenishment sizes its order from it directly.
+**Restock need** — A shortfall as it travels: the lines, the item, and the units short. The one thing inventory passes through the orchestrator to replenishment. It carries the shortfall rather than the stock reading it was derived from, so what we hold is never routed anywhere it is not needed, and replenishment sizes its order from it directly. One per *item*, not per line: two lines naming one item draw on one shelf, so they are measured together — `sum(quantity) − stock_on_hand` — and the need names every line it covers.
 
 **Target stock level** — What replenishment restocks *to*, as distinct from what the order needs: the shortfall covered, and stock left back at the reorder threshold once the order has shipped. A restock serves the customer in front of us and rebuilds the floor in the same purchase. Measured *after* the sale — measured before, the order would immediately eat the floor we just bought.
 

@@ -11,11 +11,13 @@ Three rules this module exists to make structural rather than hoped for:
 
 - **The purse opens on sales' declines, not on inventory's survey.** The
   restock is sized by intersecting sales' pass-1 `INSUFFICIENT_STOCK` declines
-  with inventory's `RestockNeed`s. The two sets are identical by construction —
-  sales snapshots the books once and nothing writes to `transactions` between
-  inventory's survey and that snapshot — so the intersection is provably
-  lossless, and where they could diverge sales' commit-time read is the right
-  one.
+  with inventory's `RestockNeed`s. Nothing writes to `transactions` between
+  inventory's survey and sales' commit-time snapshot, so neither set can hold
+  a line the other missed for want of stock — and the two now measure one
+  shelf the same way, per item and in line order, which is what #36 had to fix
+  before the intersection was lossless in fact rather than only in the
+  argument. Where they could still diverge, sales' commit-time read is the
+  right one.
 - **Pass 2 carries only lines we actually bought stock for.** A committed line
   is never offered for commitment twice, so the same sale can never be written
   twice; and a line whose restock was refused never reaches sales again, so it
@@ -66,20 +68,31 @@ def restocks_for(
     other's question — so the orchestrator, which was handed both, is the only
     thing that can put them together.
 
+    A need covering two lines of which sales declined only one is kept, and
+    narrowed to the line that was declined: the shortfall still stands — it was
+    measured over both lines and the committed one has since taken its share
+    off the shelf — but the line already sold must not be offered to sales a
+    second time.
+
     Args:
         blockers: What sales handed up from pass 1.
-        needs: The shortfalls inventory measured, in the order it measured them.
+        needs: The shortfalls inventory measured, in the order it measured
+            them, one per item.
 
     Returns:
         The needs whose lines sales declined for want of stock, in inventory's
-        own order.
+        own order, each carrying only the declined lines.
     """
     short = {
         blocker.line_id
         for blocker in blockers
         if blocker.code is BlockerCode.INSUFFICIENT_STOCK
     }
-    return [need for need in needs if need.line_id in short]
+    return [
+        need.model_copy(update={"line_ids": covered})
+        for need in needs
+        if (covered := [line_id for line_id in need.line_ids if line_id in short])
+    ]
 
 
 def lines_to_retry(

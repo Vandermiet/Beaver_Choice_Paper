@@ -372,19 +372,23 @@ and `insufficient_stock` around 14. Six divergences, each with its cause:
    the requests that named a deadline and went short. The two numbers are
    compatible; only the unit differs.
 
-5. **`insufficient_stock`: ~14 predicted, 20 measured.** The excess is a real
-   defect, still open. Inventory measures each line's shortfall against the full
-   shelf, independently, while sales draws the lines in order against one
+5. **`insufficient_stock`: ~14 predicted, 20 measured.** The excess was a real
+   defect, since fixed (#36); the figures above are from the run that exposed
+   it. Inventory measured each line's shortfall against the full shelf,
+   independently, while sales draws the lines in order against one
    reading — so two lines resolving to the same item (the default plain-paper
    item collects "printer paper", "copy paper" and "white paper") can each fit
    the shelf alone while not fitting together. Sales declines the second, and
    inventory raised no restock need for it, so there is nothing for replenishment
    to buy against. The defect predicts *more* stock refusals than a hand-count
-   assuming one line per item, which is what we see. It also falsifies a claim
+   assuming one line per item, which is what we see. It also falsified a claim
    in the retry module's own docstring: the intersection of sales' declines with
-   inventory's needs is argued there to be lossless by construction, and that
+   inventory's needs was argued there to be lossless by construction, and that
    argument covers stock *changing* between the two reads, not the two agents
-   measuring one reading differently.
+   measuring one reading differently. Inventory now measures per item over the
+   lines of the request, the way sales draws the shelf, and emits one
+   `RestockNeed` per item carrying every line it covers — so the claim holds in
+   fact and not only in the argument.
 
 6. **Signals exceeding lines.** `size_not_carried` 9 over 8 lines and
    `unit_not_understood` 2 over 1: both surplus signals belong to request 3,
@@ -443,18 +447,19 @@ walking a design over real data before building it.
 
 ## Improvements
 
-**1. Make inventory measure the shelf the way sales draws it.** This is
-divergence 5 above and the one defect in the system that costs a customer an
-order they could have had. Inventory should compute shortfalls per *item* over
-the lines of a request — lines naming one item considered together against one
-reading, in the order they arrived — and emit one restock need per item carrying
-every line it covers, sized `sum(quantity) − stock_on_hand`. Today the sum of
-independent shortfalls understates the true requirement by `(n−1) × stock`, and
-a line that shorts only because a sibling took the stock first gets no need at
-all, which is exactly the line a restock would rescue. The fix belongs to
-inventory: the shortfall is its decision to own, and replenishment cannot
-recover the arithmetic because neither the stock reading nor the requested
-quantity crosses the seam — deliberately so.
+**1. Make inventory measure the shelf the way sales draws it.** *(Done since
+this run, on #36.)* This is divergence 5 above and the one defect in the system
+that cost a customer an order they could have had. Inventory now computes
+shortfalls per *item* over the lines of a request — lines naming one item
+considered together against one reading, in the order they arrived — and emits
+one restock need per item carrying every line it covers, sized
+`sum(quantity) − stock_on_hand`. Before that, the sum of independent shortfalls
+understated the true requirement by `(n−1) × stock`, and a line that shorted
+only because a sibling took the stock first got no need at all, which is
+exactly the line a restock rescues. The fix belonged to inventory: the
+shortfall is its decision to own, and replenishment could not recover the
+arithmetic because neither the stock reading nor the requested quantity crosses
+the seam — deliberately so.
 
 **2. Give an empty delegation an answer instead of a model.** One of 71
 delegations in this run errored, and it took a request down with it: the

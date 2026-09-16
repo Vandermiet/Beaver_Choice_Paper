@@ -55,10 +55,12 @@ CHEAP = "A4 paper"
 DEAR = "Rolls of banner paper (36-inch width)"
 
 
-def a_need(shortfall: int, item_name: str = CHEAP, line_id: str = "L1") -> RestockNeed:
-    """One shortfall as inventory emitted it."""
+def a_need(shortfall: int, item_name: str = CHEAP, *line_ids: str) -> RestockNeed:
+    """One shortfall as inventory emitted it, over the lines it covers."""
     return RestockNeed(
-        line_id=line_id, item_name=item_name, shortfall_units=shortfall
+        line_ids=list(line_ids) or ["L1"],
+        item_name=item_name,
+        shortfall_units=shortfall,
     )
 
 

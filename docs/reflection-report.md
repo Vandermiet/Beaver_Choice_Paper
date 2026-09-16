@@ -236,8 +236,9 @@ committed to, rather than discovered during implementation.
 
 The run is `20260916T111405Z`, over all twenty requests of
 `quote_requests_sample.csv` from an empty database, and it is the run
-`project/test_results/test_results.csv` came out of. Its audit trail is still in
-`project/munder_difflin.db`, which is where every figure below is read from.
+`project/test_results/test_results.csv` came out of. Its audit trail is
+committed beside it as `project/test_results/audit_20260916T111405Z.sql`, which
+is where every figure below is read from.
 None of these are the design's predictions; the predictions are compared against
 them further down, and where the two disagree the trail is what happened.
 
@@ -507,10 +508,13 @@ four above are defects and gaps, and defects come first.
 ## Appendix: every measured figure and its query
 
 Each figure in the evaluation section is named below with the SQL that produced
-it, run against `project/munder_difflin.db` — the database still holding run
-`20260916T111405Z`. `project/tests/test_report.py` executes every query here and
-asserts it returns the number stated, so the prose cannot drift away from the
-trail.
+it. `init_database` rewrites `munder_difflin.db` on every run, so the repo does
+not carry it; the run's audit trail travels instead as
+`project/test_results/audit_20260916T111405Z.sql`, a dump of the seven audit
+tables and the transactions they link to. `project/tests/test_report.py`
+rebuilds that dump in memory, executes every query below against it, and asserts
+each one answers the number stated — including the figures restated in the prose
+tables above. The prose cannot drift away from the trail.
 
 | figure | value | what it counts |
 |---|---|---|
@@ -546,6 +550,8 @@ trail.
 | `blocker.unpriceable` | 0 | signals raised |
 | `blocker.cash_insufficient` | 0 | signals raised |
 | `trail.delegations` | 71 | delegation steps recorded |
+| `trail.request_3_inventory_delegations` | 3 | request 3's concurrent inventory calls |
+| `trail.request_3_quoting_delegations` | 2 | request 3's concurrent quoting calls |
 | `trail.errored_delegations` | 1 | steps carrying an error |
 | `trail.unlinked_runtime_transactions` | 0 | runtime transactions with no link row |
 | `trail.links_to_seeded_rows` | 0 | links pointing at a seeded transaction |
@@ -688,6 +694,14 @@ select count(*) from blocker_signals where code = 'cash_insufficient';
 
 -- figure: trail.delegations
 select count(*) from agent_steps where kind = 'delegation';
+
+-- figure: trail.request_3_inventory_delegations
+select count(*) from agent_steps
+ where request_id = '3' and agent = 'inventory' and kind = 'delegation';
+
+-- figure: trail.request_3_quoting_delegations
+select count(*) from agent_steps
+ where request_id = '3' and agent = 'quoting' and kind = 'delegation';
 
 -- figure: trail.errored_delegations
 select count(*) from agent_steps where error is not null;

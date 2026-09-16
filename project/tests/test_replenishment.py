@@ -147,17 +147,19 @@ class TestTwoLinesOneItem:
         assert plan.order_qty == 100 + 50 + 135
 
     async def test_one_row_is_written_and_both_lines_point_at_it(self, trail):
-        """The rowid is compared to itself rather than to the row's own: the
-        helper reads `last_insert_rowid()` through `pd.read_sql` on a second
-        pooled connection, so the number it returns is not reliably the row it
-        just wrote. The lock narrows that window and cannot close it, and the
-        helpers are used as-is."""
+        """And the rowid both lines carry is the purchase's own.
+
+        The provided helper's `last_insert_rowid()` cannot say which row that
+        is — see `tests/test_ledger.py` — so `ledger.write_row` reads it back
+        itself, and this asserts against the row rather than against the
+        number the helper returned.
+        """
         needs = [a_need(100, CHEAP, "L1"), a_need(50, CHEAP, "L2")]
         response = await restock(needs, trail)
-        assert len(bought_on(REQUEST_DATE)) == 1
+        [purchase] = bought_on(REQUEST_DATE)
         rowids = response.internal.transaction_rowid_by_line
         assert set(rowids) == {"L1", "L2"}
-        assert len(set(rowids.values())) == 1
+        assert set(rowids.values()) == {purchase["rowid"]}
         assert len(links()) == 1
 
     async def test_both_lines_are_promised_the_one_arrival_date(self, trail):

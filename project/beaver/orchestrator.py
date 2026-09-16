@@ -337,21 +337,20 @@ async def _commit(
     Returns:
         Sales' envelope, for the seam to narrow.
     """
+    # Routed on the deps rather than in the prompt: sales' output function
+    # reads it there, so the date we promise goods we do not yet hold is never
+    # a date a model retyped. Set without restoring afterwards, because `ctx`
+    # here is already this delegation's own — `@delegation` hands each one a
+    # copy of the deps (see `audit._with_step_id`), so pass 2's availability
+    # cannot reach pass 1's sales agent or any delegation beside it.
     deps = ctx.deps
-    # Routed on the deps rather than in the prompt, and restored afterwards for
-    # the same reason `current_step_id` is: one request's deps outlive one
-    # delegation. Sales' output function reads it there, so the date we promise
-    # goods we do not yet hold is never a date a model retyped.
     deps.earliest_availability = availability or {}
-    try:
-        return await sales_agent.run(
-            _ask("Commit what we can of these priced lines", lines, as_of_date),
-            deps=deps,
-            usage=ctx.usage,
-            model=shared_model(),
-        )
-    finally:
-        deps.earliest_availability = {}
+    return await sales_agent.run(
+        _ask("Commit what we can of these priced lines", lines, as_of_date),
+        deps=deps,
+        usage=ctx.usage,
+        model=shared_model(),
+    )
 
 
 @delegation(AgentName.REPLENISHMENT)

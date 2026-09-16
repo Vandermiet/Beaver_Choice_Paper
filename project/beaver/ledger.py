@@ -105,13 +105,49 @@ async def write_row(
         The `transactions` rowid of the row just written.
     """
     return await asyncio.to_thread(
-        starter.create_transaction,
+        _write_and_read_back_the_rowid,
         item_name,
         transaction_type,
         units,
         total_price,
         booked_on.isoformat(),
     )
+
+
+def _write_and_read_back_the_rowid(
+    item_name: str,
+    transaction_type: str,
+    units: int,
+    total_price: float,
+    booked_on: str,
+) -> int:
+    """Write the row through the provided helper, and find its rowid ourselves.
+
+    The helper's own return value is not usable: it reads `last_insert_rowid()`
+    on a *second* pooled connection, so what comes back is some other
+    connection's last insert. Issue #39 has the measurements.
+
+    The helpers are used as-is, so the workaround lives here, in the wrapper
+    that calls one. `MAX(rowid)` is the row just written, on three counts:
+    `write_lock` is held, which is this function's documented precondition;
+    that lock serialises writers within one event loop, and the harness runs
+    one loop and one process, so there is no second writer it does not cover;
+    and nothing in this system ever deletes a transaction, which is the only
+    thing that could let SQLite hand the same rowid out twice.
+
+    Args:
+        item_name: The exact carried-catalogue name.
+        transaction_type: `sales` or `stock_orders`.
+        units: The quantity moving.
+        total_price: The line total.
+        booked_on: The date the row is dated, ISO-formatted.
+
+    Returns:
+        The `transactions` rowid of the row just written.
+    """
+    starter.create_transaction(item_name, transaction_type, units, total_price, booked_on)
+    with starter.engine().connect() as conn:
+        return int(conn.execute(text("SELECT MAX(rowid) FROM transactions")).scalar_one())
 
 
 def link_to_request(

@@ -4,11 +4,11 @@ It never acts on a system of record. It plans and drives the sequence of
 delegations, reads the signals that come back, and is the only component that
 writes customer-facing prose.
 
-Ticket 103 wired the first delegation and ticket 104 the second: the
-orchestrator extracts catalogue-blind requested lines from the customer's
-prose, inventory resolves them, quoting prices what resolved, and the reply is
-composed here from what came back. Sales, replenishment, the bounded retry and
-the outcome derivation land in tickets 105-108.
+Tickets 103-105 wired the first three delegations: the orchestrator extracts
+catalogue-blind requested lines from the customer's prose, inventory resolves
+them, quoting prices what resolved, sales commits what we hold and writes the
+money, and the reply is composed here from what came back. Replenishment, the
+bounded retry and the outcome derivation land in tickets 106-108.
 
 Two boundaries this module exists to hold:
 
@@ -33,6 +33,8 @@ from beaver.inventory.agent import inventory_agent
 from beaver.inventory.models import ResolvedLine
 from beaver.llm import shared_model
 from beaver.quoting.agent import quoting_agent
+from beaver.quoting.models import QuotedLine
+from beaver.sales.agent import sales_agent
 
 INSTRUCTIONS = """
 You are the customer desk of Beaver's Choice Paper Company, a paper supplier.
@@ -67,6 +69,19 @@ a price for each line: the units, the price per unit, the total before any
 discount, the discount band and rate the line earned, and the total after it.
 Skip this step only when inventory resolved nothing at all.
 
+Then call `consult_sales` **once**, passing every priced line exactly as
+quoting returned it, with the same date. It places the order: it answers with
+the lines we committed and the date each will be delivered, the lines we could
+not, and what the order came to. A line it could not commit comes back with one
+more blocker:
+
+- `insufficient_stock` — we do not hold enough of that to fill the line. Say
+  that we are unable to supply that line at present, without saying how much we
+  hold or how short we are, and never offer a partial quantity: the line was
+  declined whole.
+
+Skip this step only when nothing was priced.
+
 Finally write the reply. Your entire answer **is** the letter — a short, warm,
 professional message that a customer could read as it stands. Do not show your
 working, do not list the request back with its line numbers, do not write
@@ -86,9 +101,11 @@ about discounts at all: a discount sentence on every line makes the real ones
 invisible. Use the figures you were given exactly as they are, to the cent;
 never calculate one, round one, or offer a discount that was not quoted.
 
-Never state a price for a line that was not priced, and never promise a
-delivery date — nothing has been worked out about delivery yet, and inventing
-one would be a promise the business has not made. Never mention stock levels,
+State the delivery date sales gave you for the lines it committed, exactly as
+it gave it to you. Never state a price for a line that was not priced, never
+promise a date for a line that was not committed, and never invent or move a
+date: a delivery promise the business has not made is one it cannot keep.
+Never mention stock levels,
 our cash position, our suppliers, internal codes, line numbers, tools or
 colleagues: the customer is reading a letter from a company, not a system
 report.
@@ -161,6 +178,35 @@ async def consult_quoting(
     )
 
 
+@orchestrator_agent.tool
+@delegation(AgentName.SALES)
+async def consult_sales(
+    ctx: RunContext[AgentDeps],
+    lines: list[QuotedLine],
+    as_of_date: str,
+):
+    """Ask sales to place the order: which priced lines can we commit today?
+
+    Give it every line quoting priced, exactly as quoting returned it. Sales
+    re-reads the shelf at the moment of commitment, so a line inventory saw
+    stock for may still be declined — and a line it commits has been sold.
+
+    Args:
+        lines: The lines quoting priced, exactly as it returned them.
+        as_of_date: The date the request arrived, as `YYYY-MM-DD`.
+
+    Returns:
+        The lines we committed with the date each is promised for, the lines we
+        could not commit, and what the order came to.
+    """
+    return await sales_agent.run(
+        _ask("Commit what we can of these priced lines", lines, as_of_date),
+        deps=ctx.deps,
+        usage=ctx.usage,
+        model=shared_model(),
+    )
+
+
 def _ask(instruction: str, lines: list[BaseModel], as_of_date: str) -> str:
     """The prompt a delegation sends: what to do, the date, and the lines as JSON.
 
@@ -186,10 +232,10 @@ def _ask(instruction: str, lines: list[BaseModel], as_of_date: str) -> str:
 #: orchestrator and everything it delegates to. A model that loops instead of
 #: answering is the failure this bounds, and it is a real one: an early run
 #: watched one request call `check_stock` eighty-two times and take the other
-#: nineteen requests down with it. Sixteen is about twice a healthy request's
-#: cost with two delegations in the sequence — the orchestrator's own turns plus
-#: a handful each for inventory and quoting.
-REQUEST_BUDGET = UsageLimits(request_limit=16)
+#: nineteen requests down with it. Twenty is about twice a healthy request's
+#: cost with three delegations in the sequence — the orchestrator's own turns
+#: plus a handful each for inventory, quoting and sales.
+REQUEST_BUDGET = UsageLimits(request_limit=20)
 
 _log = logging.getLogger(__name__)
 

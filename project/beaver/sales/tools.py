@@ -24,7 +24,9 @@ rather than to add a rule of our own:
   directly, so a unit price there would understate cash by 100-10,000x. It also
   runs `INSERT` and `SELECT last_insert_rowid()` as two statements through a
   pooled engine, and `last_insert_rowid()` is per-connection — hence the lock,
-  which belongs here and never in the helper.
+  which lives in `beaver.ledger` rather than here because replenishment writes
+  through the same door and a lock per agent would serialise neither against
+  the other.
 - `read_cash` wraps `get_cash_balance` as the post-write read. The delta
   against the snapshot's `cash_balance` is the rubric's evidence that a request
   moved money.
@@ -50,19 +52,10 @@ from datetime import date
 
 from sqlalchemy import text
 
-from beaver import starter
+from beaver import ledger, starter
 from beaver.contract import CarriedItemName
 from beaver.quoting.models import QuotedLine
 from beaver.sales.models import FinancialSnapshot, LineDecision, LineVerdict
-
-#: Serialises `create_transaction` across the whole process. The helper writes
-#: the row and then asks the connection for `last_insert_rowid()`; between those
-#: two statements a second writer on another pooled connection would leave the
-#: first holding a rowid that belongs to someone else's sale. Nothing calls
-#: sales concurrently today, and the lock is what makes that a choice rather
-#: than a load-bearing assumption.
-_write_lock = asyncio.Lock()
-
 
 def snapshot_financials(
     item_names: list[CarriedItemName], as_of_date: str
@@ -184,10 +177,11 @@ async def record_sale(
 ) -> dict[str, int]:
     """Write the transaction registry: one row per committed line, under the lock.
 
-    The order's rows are written while the lock is held, so no other writer can
-    come between a row and the rowid it reports. Each row is threaded back to
-    the request that caused it, in `transaction_links`, and to the quote it
-    fulfils, in `quote_fulfilments`, **before the next row is written** — the
+    The order's rows are written while the ledger's lock is held — the one
+    every writer shares — so no other writer can come between a row and the
+    rowid it reports. Each row is threaded back to the request that caused it,
+    in `transaction_links`, and to the quote it fulfils, in
+    `quote_fulfilments`, **before the next row is written** — the
     `transactions` table's own `id` column is NULL for every row written at
     runtime, so the rowid is the only key there is to join on, and a row whose
     link was left to a later step would be money nobody could trace if that
@@ -209,20 +203,16 @@ async def record_sale(
         return {}
 
     rowid_by_line: dict[str, int] = {}
-    async with _write_lock:
+    async with ledger.write_lock:
         for line in lines:
-            # Blocking, and deliberately run off the event loop: the lock is
-            # what serialises it, so a second caller waits at the lock rather
-            # than interleaving inside the helper's two statements.
-            rowid = await asyncio.to_thread(
-                starter.create_transaction,
+            rowid = await ledger.write_row(
                 line.item_name,
                 "sales",
                 line.units,
                 # The line total, never the unit price: `get_cash_balance` sums
                 # this column directly.
                 line.line_total,
-                sold_on.isoformat(),
+                sold_on,
             )
             rowid_by_line[line.line_id] = rowid
             await asyncio.to_thread(
@@ -253,22 +243,11 @@ def _link_transaction(
         request_id: The request the sale belongs to.
         step_id: The delegation that committed it.
     """
+    # One transaction for both links: they are two facts about one row, and a
+    # row traceable to its request but not to the offer it honoured is half a
+    # record. The ledger writes the first inside the transaction opened here.
     with starter.engine().begin() as conn:
-        conn.execute(
-            text(
-                """
-                INSERT INTO transaction_links (
-                  transaction_rowid, run_id, request_id, step_id
-                ) VALUES (:transaction_rowid, :run_id, :request_id, :step_id)
-                """
-            ),
-            {
-                "transaction_rowid": rowid,
-                "run_id": run_id,
-                "request_id": request_id,
-                "step_id": step_id,
-            },
-        )
+        ledger.link_to_request(rowid, run_id, request_id, step_id, conn=conn)
         conn.execute(
             text(
                 """

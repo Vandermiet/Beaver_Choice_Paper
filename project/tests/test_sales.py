@@ -20,14 +20,13 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_core import to_jsonable_python
 from sqlalchemy import text
 
-from beaver import orchestrator, starter
+from beaver import ledger, orchestrator, starter
 from beaver.audit import AgentDeps
 from beaver.contract import AgentName, BlockerCode
 from beaver.inventory.agent import inventory_agent
 from beaver.orchestrator import orchestrator_agent
 from beaver.quoting.agent import quoting_agent
 from beaver.quoting.tools import price_line, price_of, quote_total
-from beaver.sales import tools
 from beaver.sales.agent import sales_agent
 from beaver.sales.models import LineVerdict
 from beaver.sales.tools import (
@@ -499,7 +498,7 @@ class TestTheWriteLock:
             return rowid
 
         monkeypatch.setattr(starter, "create_transaction", slow)
-        monkeypatch.setattr(tools, "_write_lock", contextlib.nullcontext())
+        monkeypatch.setattr(ledger, "write_lock", contextlib.nullcontext())
 
         async def commit(item_name: str, line_id: str):
             return await record_sale(

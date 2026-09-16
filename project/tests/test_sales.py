@@ -20,7 +20,13 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_core import to_jsonable_python
 from sqlalchemy import text
 
-from tests.messages import PRICED, handed_down, handed_up
+from tests.messages import (
+    NEEDS,
+    PRICED,
+    availability_handed_down,
+    handed_down,
+    handed_up,
+)
 
 from beaver import ledger, orchestrator, starter
 from beaver.audit import AgentDeps
@@ -28,6 +34,7 @@ from beaver.contract import AgentName, BlockerCode
 from beaver.inventory.agent import inventory_agent
 from beaver.orchestrator import orchestrator_agent
 from beaver.quoting.agent import quoting_agent
+from beaver.replenishment.agent import replenishment_agent
 from beaver.quoting.tools import price_line, price_of, quote_total
 from beaver.sales.agent import sales_agent
 from beaver.sales.models import LineVerdict
@@ -552,10 +559,15 @@ _AS_STATED = {"A4 paper": "printer paper", "Cardstock": "cardstock"}
 def scripted_flow(lines, as_of_date: str = REQUEST_DATE, seen: list | None = None):
     """The whole sequence under one scripted model: inventory, quoting, sales.
 
-    The orchestrator's calls to quoting and sales are built from what the
-    previous delegation actually handed up, rather than from constants — so the
-    test exercises the real hand-off, including the `quote_line_id` quoting
+    The orchestrator's calls to quoting and `place_order` are built from what
+    the previous delegation actually handed up, rather than from constants — so
+    the test exercises the real hand-off, including the `quote_line_id` quoting
     minted and the prices it computed.
+
+    The deadline it passes is the request date itself. These are ticket 105's
+    tests and their subject is pass 1, so a same-day deadline keeps the retry's
+    purse shut — no supplier reaches us the day we order — and a short line
+    stays short. The retry itself is `test_retry.py`.
     """
     requested = [
         {
@@ -603,17 +615,18 @@ def scripted_flow(lines, as_of_date: str = REQUEST_DATE, seen: list | None = Non
                 return ModelResponse(
                     parts=[
                         ToolCallPart(
-                            "consult_sales",
+                            "place_order",
                             {
                                 "lines": handed_up(messages, "consult_quoting")[
                                     "quoted_lines"
                                 ],
                                 "as_of_date": as_of_date,
+                                "deadline": as_of_date,
                             },
                         )
                     ]
                 )
-            return ModelResponse(parts=[TextPart(a_letter(handed_up(messages, "consult_sales")))])
+            return ModelResponse(parts=[TextPart(a_letter(handed_up(messages, "place_order")))])
         if "catalogue_price" in tools:
             if len(messages) == 1:
                 return ModelResponse(
@@ -646,12 +659,31 @@ def scripted_flow(lines, as_of_date: str = REQUEST_DATE, seen: list | None = Non
                         )
                     ]
                 )
+            final = {"lines": quoted, "as_of_date": as_of_date}
+            availability = availability_handed_down(messages)
+            if availability:
+                final["earliest_availability"] = availability
+            return ModelResponse(parts=[ToolCallPart("final_result", final)])
+        if "reorder_thresholds" in tools:
+            [request] = handed_down(messages, NEEDS)
+            if len(messages) == 1:
+                return ModelResponse(
+                    parts=[
+                        ToolCallPart(
+                            "reorder_thresholds",
+                            {
+                                "item_names": sorted(
+                                    {need["item_name"] for need in request["needs"]}
+                                )
+                            },
+                        ),
+                        ToolCallPart(
+                            "cash_available", {"as_of_date": request["request_date"]}
+                        ),
+                    ]
+                )
             return ModelResponse(
-                parts=[
-                    ToolCallPart(
-                        "final_result", {"lines": quoted, "as_of_date": as_of_date}
-                    )
-                ]
+                parts=[ToolCallPart("final_result", {"request": request})]
             )
         if len(messages) == 1:
             return ModelResponse(
@@ -709,6 +741,7 @@ class TestThroughTheOrchestrator:
             inventory_agent.override(model=model),
             quoting_agent.override(model=model),
             sales_agent.override(model=model),
+            replenishment_agent.override(model=model),
         ):
             return await orchestrator.handle_request(
                 "I would like to order some paper. (Date of request: 2025-04-01)",
@@ -756,10 +789,19 @@ class TestThroughTheOrchestrator:
         assert [row["item_name"] for row in sales_rows()] == ["Cardstock"]
 
     async def test_the_short_line_reaches_the_orchestrator_as_a_code_and_a_line(self):
+        """A code and a line id, and never the sentence behind them.
+
+        Under the same-day deadline these tests run with, the code standing on
+        the line by the time the sequence ends is `deadline_unmeetable` — we
+        would have bought the stock and it could not have reached us in time.
+        Which code it is is `test_retry.py`'s subject; that it arrives as a
+        code rather than as a detail string is this one's.
+        """
         await self.handle([("L1", "A4 paper", 500)])
         handed_up_json = self.orchestrator_saw()
-        assert '"insufficient_stock"' in handed_up_json.replace(" ", "")
+        assert '"deadline_unmeetable"' in handed_up_json.replace(" ", "")
         assert "requested 500" not in handed_up_json
+        assert "nothing bought" not in handed_up_json
 
     async def test_no_cash_figure_or_stock_count_enters_the_orchestrators_context(self):
         await self.handle([("L1", "Cardstock", 500), ("L2", "A4 paper", 500)])

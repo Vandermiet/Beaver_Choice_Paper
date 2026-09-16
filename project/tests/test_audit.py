@@ -197,7 +197,7 @@ def steps(trail: AuditTrail, request_id: str | None = None):
 
 
 class TestBootstrap:
-    def test_it_creates_all_six_tables(self, trail):
+    def test_it_creates_all_seven_tables(self, trail):
         with project_starter.db_engine.connect() as conn:
             names = set(
                 conn.execute(
@@ -211,6 +211,7 @@ class TestBootstrap:
             "suspended_flows",
             "quote_registry",
             "quote_fulfilments",
+            "request_cash",
         } <= names
 
     def test_rows_survive_a_later_init_database(self, trail):

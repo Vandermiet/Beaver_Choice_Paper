@@ -647,8 +647,8 @@ def run_test_scenarios():
     from beaver.orchestrator import handle_request
 
     # After `init_database`, per the trail's own design: that call's
-    # `if_exists="replace"` is scoped to its own four tables, so the six audit
-    # tables survive a re-init and their rows accumulate across runs.
+    # `if_exists="replace"` is scoped to its own four tables, so the seven
+    # audit tables survive a re-init and their rows accumulate across runs.
     bootstrap_audit()
 
     results = []

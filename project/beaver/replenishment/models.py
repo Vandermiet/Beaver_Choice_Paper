@@ -28,7 +28,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
-from beaver.contract import AgentResponse, BlockerCode, CarriedItemName, InternalPayload
+from beaver.contract import AgentResponse, BlockerCode, CarriedItemName, MovesCash
 from beaver.inventory.models import RestockNeed
 
 
@@ -192,7 +192,7 @@ class ReplenishmentCustomerPayload(BaseModel):
     restocked: list[RestockedItem]
 
 
-class ReplenishmentInternalPayload(InternalPayload):
+class ReplenishmentInternalPayload(MovesCash):
     """What only the trail sees: what we bought, what we paid, and what we held.
 
     `unit_cost_by_item` is the one field in the system from which a margin
@@ -200,10 +200,11 @@ class ReplenishmentInternalPayload(InternalPayload):
     reason — the business reports what cash moved and claims no profit figure,
     because stock bought before the supplier cost ratio existed and stock
     bought under it sit in the same bin at different costs.
+
+    `cash_before` and `cash_after` come from `MovesCash`, which is what makes
+    this step count towards the request's own cash delta.
     """
 
-    cash_before: float
-    cash_after: float
     #: What the guard was actually allowed to spend: `cash_before` less the
     #: revenue this request itself brought in on pass 1.
     cash_on_hand: float

@@ -142,4 +142,6 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Step** — One domain agent's turn within one request: what it was asked, what it answered, what it signalled. The unit of the audit trail.
 
+**Per-request cash delta** — What one customer request did to the cash balance: the books before its first money-moving step against the books after its last. Not any single agent's figure — a sale, the purchase it triggered and the second sale after it each report their own movement, and none of them is the request's — so it is measured by the orchestrator, the only component that sees all three. Recorded in the trail rather than told to anyone: the customer hears what their order came to, never what the business holds.
+
 **Run** — One pass of the harness over the sample requests. Identifies steps and suspended flows, and distinguishes a request from the same request in a later run.

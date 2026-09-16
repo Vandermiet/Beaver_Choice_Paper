@@ -537,10 +537,8 @@ class TestThroughTheOrchestrator:
         self.seen: list = []
         return trail
 
-    async def handle(self, lines: list[tuple[str, str, int]], narrate: bool = False):
+    async def handle(self, lines: list[tuple[str, str, int]]):
         model = scripted(stated(lines), seen=self.seen)
-        if narrate:
-            model = narrating(model)
         with (
             orchestrator_agent.override(model=model),
             inventory_agent.override(model=model),
@@ -551,6 +549,30 @@ class TestThroughTheOrchestrator:
                 request_date="2025-04-01",
                 request_id=1,
             )
+
+    async def compose(self, lines: list[tuple[str, str, int]]) -> str:
+        """The letter the orchestrator wrote, with no outcome derived over it.
+
+        This class stops the sequence at quoting, which leaves a priced line
+        undecided — and `handle_request` rightly refuses to call that an
+        outcome. Whether quoting's facts suffice for the prose is what is under
+        test here, so the orchestrator is run directly.
+
+        Args:
+            lines: The lines to price.
+
+        Returns:
+            The orchestrator's letter.
+        """
+        model = narrating(scripted(stated(lines), seen=self.seen))
+        deps = AgentDeps(trail=orchestrator.trail(), request_id="1")
+        with (
+            orchestrator_agent.override(model=model),
+            inventory_agent.override(model=model),
+            quoting_agent.override(model=model),
+        ):
+            result = await orchestrator_agent.run("I would like some paper.", deps=deps)
+        return result.output
 
     def orchestrator_saw(self) -> str:
         return json.dumps(to_jsonable_python(self.seen[-1]))
@@ -586,15 +608,15 @@ class TestThroughTheOrchestrator:
         """Quoting supplies facts and the orchestrator supplies the words, so
         the test the AC deserves is that the facts suffice: the rate, the line
         that earned it, and both totals are all on the customer half."""
-        reply = await self.handle([("L1", "A4 paper", 500)], narrate=True)
-        assert "500 units of A4 paper at $0.05 each — $25.00" in reply
-        assert "less 5% for the size of this line — $23.75" in reply
+        letter = await self.compose([("L1", "A4 paper", 500)])
+        assert "500 units of A4 paper at $0.05 each — $25.00" in letter
+        assert "less 5% for the size of this line — $23.75" in letter
 
     async def test_a_line_that_earned_nothing_gets_no_discount_sentence(self):
         """A discount sentence on every line makes the real ones invisible."""
-        reply = await self.handle([("L1", "A4 paper", 300)], narrate=True)
-        assert "$15.00" in reply
-        assert "less" not in reply
+        letter = await self.compose([("L1", "A4 paper", 300)])
+        assert "$15.00" in letter
+        assert "less" not in letter
 
     async def test_the_registry_row_is_written_before_anyone_rules_on_delivery(self):
         """Sales does not exist yet, and the row exists anyway. That gap is the

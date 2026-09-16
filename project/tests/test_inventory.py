@@ -18,7 +18,7 @@ from pydantic_core import to_jsonable_python
 
 from beaver import orchestrator, starter
 from beaver.audit import AgentDeps
-from beaver.contract import AgentName, BlockerCode
+from beaver.contract import AgentName, BlockerCode, Outcome
 from beaver.inventory.agent import inventory_agent
 from beaver.inventory.models import ProductCategory, ResolutionDecision
 from beaver.inventory.tools import check_stock, list_carried_catalogue, read_stock
@@ -252,6 +252,26 @@ class TestThroughTheOrchestrator:
                 request_id=request_id,
             )
 
+    async def compose(self, stated) -> str:
+        """The letter the orchestrator wrote, with no outcome derived over it.
+
+        This class stops the sequence at inventory, which leaves a resolved
+        line undecided — and `handle_request` rightly refuses to call that an
+        outcome. The prose is what is under test here, so the orchestrator is
+        run directly and the derivation left to `test_outcome.py`.
+
+        Args:
+            stated: What the customer asked for.
+
+        Returns:
+            The orchestrator's letter.
+        """
+        model = scripted(lines_of(*stated), seen=self.seen)
+        deps = AgentDeps(trail=orchestrator.trail(), request_id="1")
+        with orchestrator_agent.override(model=model), inventory_agent.override(model=model):
+            result = await orchestrator_agent.run("I would like some paper.", deps=deps)
+        return result.output
+
     def orchestrator_saw(self) -> str:
         """Everything that entered the orchestrator's context, as JSON."""
         return json.dumps(to_jsonable_python(self.seen[-1]))
@@ -264,8 +284,8 @@ class TestThroughTheOrchestrator:
         return json.loads(raw)
 
     async def test_the_harness_gets_the_orchestrators_prose(self, wired):
-        reply = await self.handle([("500 sheets of printer paper", 500, "sheets")])
-        assert reply == REPLY
+        letter = await self.compose([("500 sheets of printer paper", 500, "sheets")])
+        assert letter == REPLY
 
     async def test_the_delegation_and_its_tool_calls_are_both_in_the_trail(self, wired):
         await self.handle([("500 sheets of printer paper", 500, "sheets")])
@@ -318,7 +338,9 @@ class TestThroughTheOrchestrator:
                 request_date="2025-04-01",
                 request_id=1,
             )
-        assert reply == orchestrator.APOLOGY
+        assert reply.customer_message == orchestrator.APOLOGY
+        assert reply.outcome is Outcome.REJECTED
+        assert reply.resume_token is None
         with starter.engine().connect() as conn:
             assert conn.execute(text("SELECT count(*) FROM blocker_signals")).scalar_one() == 0
 

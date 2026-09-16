@@ -10,6 +10,8 @@ Module boundaries:
 - `contract` — the shared kernel: the canonical envelope, the blocker
   protocol, the carried-catalogue validator.
 - `audit`    — the audit trail the orchestrator owns.
+- `ledger`   — the single door to `create_transaction`: the one lock both
+  writers share, and the link that makes every row traceable to its request.
 - `llm`      — model construction against the Vocareum proxy.
 - `starter`  — the single import point for the provided harness helpers.
 - `orchestrator` — the delegation sequence and the customer-facing reply.

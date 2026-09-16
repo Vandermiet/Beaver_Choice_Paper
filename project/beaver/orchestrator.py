@@ -7,10 +7,12 @@ writes customer-facing prose.
 Tickets 103-105 wired the first three delegations: the orchestrator extracts
 catalogue-blind requested lines from the customer's prose, inventory resolves
 them, quoting prices what resolved, sales commits what we hold and writes the
-money, and the reply is composed here from what came back. Replenishment, the
-bounded retry and the outcome derivation land in tickets 106-108.
+money, and the reply is composed here from what came back. Ticket 106 gave the
+request an end: every one now returns a stated outcome, and a request that
+cannot proceed comes back as one message asking all of its questions at once.
+Replenishment and the bounded retry land in tickets 107-108.
 
-Two boundaries this module exists to hold:
+Three boundaries this module exists to hold:
 
 - **The orchestrator extracts; inventory resolves.** The lines it emits carry
   the customer's own words, the quantity as stated and the unit as stated. It
@@ -18,20 +20,32 @@ Two boundaries this module exists to hold:
   fails downstream and a validator is the only thing that can prove it did not.
 - **The orchestrator owns every customer-facing word.** Domain agents supply
   facts and codes and never prose, so tone cannot drift across four agents.
+- **The orchestrator alone derives the outcome.** No agent reports one and none
+  of them could: an agent sees only its own lines. The derivation is ordinary
+  function code in `beaver.outcome`, over the journal the seam fills, so how a
+  request ended is testable without a model and cannot be a model's opinion.
 """
 
 import functools
 import logging
+from datetime import date
 
 from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.usage import UsageLimits
 
 from beaver.audit import AgentDeps, AuditTrail, delegation, new_run_id
-from beaver.contract import AgentName, RequestedLine
+from beaver.contract import (
+    AgentName,
+    CustomerRequest,
+    Outcome,
+    RequestedLine,
+    RequestResolution,
+)
 from beaver.inventory.agent import inventory_agent
 from beaver.inventory.models import ResolvedLine
 from beaver.llm import shared_model
+from beaver.outcome import derive_outcome, suspend
 from beaver.quoting.agent import quoting_agent
 from beaver.quoting.models import QuotedLine
 from beaver.sales.agent import sales_agent
@@ -91,7 +105,10 @@ placeholder name: sign off as Beaver's Choice Paper Company.
 Confirm the lines sales committed by the name we sell them as and the quantity
 they asked for — those are orders placed, not offers. Address every line we
 could not supply, in the customer's own terms, and put all of your questions
-together in one place so one round of correspondence clears them.
+together in one place so one round of correspondence clears them. This letter
+is the only message they will get, so never say that you will follow up, come
+back to them, or write again about a line: whatever you need to know, ask it
+here.
 
 State the price of every line sales committed, in its own words: how many
 units, at what price each, and what that comes to. Do not price a line we
@@ -143,6 +160,12 @@ async def consult_inventory(
         The lines inventory resolved, under the exact names we sell them as,
         and one blocker for each line it could not.
     """
+    # The one thing in the journal that no delegation hands up: these lines are
+    # the orchestrator's own reading of the enquiry, and they are the
+    # denominator of "every line has dropped". Recorded here because this is
+    # where they are first stated, and before the delegation rather than after
+    # it so that a request whose inventory step fails still knows what it asked.
+    ctx.deps.journal.requested_lines = list(lines)
     return await inventory_agent.run(
         _ask("Resolve these lines", lines, as_of_date),
         deps=ctx.deps,
@@ -265,8 +288,8 @@ async def handle_request(
     request_with_date: str,
     request_date: str,
     request_id: int,
-) -> str:
-    """Handle one customer request and return the reply the customer reads.
+) -> RequestResolution:
+    """Handle one customer request and state how it ended.
 
     Args:
         request_with_date: The customer's prose with the request date appended,
@@ -278,9 +301,11 @@ async def handle_request(
         request_id: The harness's 1-based index for the request.
 
     Returns:
-        The customer-facing reply.
+        The outcome, the one message the customer reads, and a resume token if
+        the request paused for a revision.
     """
-    deps = AgentDeps(trail=trail(), request_id=str(request_id))
+    run_trail = trail()
+    deps = AgentDeps(trail=run_trail, request_id=str(request_id))
     try:
         result = await orchestrator_agent.run(
             f"{request_with_date}\n\nThe date of this request is {request_date}.",
@@ -288,12 +313,64 @@ async def handle_request(
             model=shared_model(),
             usage_limits=REQUEST_BUDGET,
         )
+        outcome = derive_outcome(deps.journal)
+        token = None
+        if outcome is Outcome.PENDING_CUSTOMER_REVISION:
+            flow = suspend(
+                deps.journal,
+                _as_request(deps, request_with_date, request_date),
+            )
+            run_trail.write_suspension(flow)
+            token = flow.resume_token
     except Exception:
         # A crash is a bug, and a bug must not look like a business decision:
         # nothing here raises a blocker signal, and the trail already holds the
-        # exception in `agent_steps.error`. What it must also not do is end the
-        # evaluation — the harness has no error handling of its own, so an
-        # escaping exception would take the remaining requests with it.
+        # exception in `agent_steps.error`, which is where the two are told
+        # apart. What it must also not do is end the evaluation — the harness
+        # has no error handling of its own, so an escaping exception would take
+        # the remaining requests with it.
         _log.exception("request %s failed", request_id)
-        return APOLOGY
-    return result.output
+        return RequestResolution(
+            request_id=str(request_id),
+            outcome=Outcome.REJECTED,
+            customer_message=APOLOGY,
+            resume_token=None,
+        )
+    return RequestResolution(
+        request_id=str(request_id),
+        outcome=outcome,
+        # The whole of the leak guarantee, at the point it matters: the message
+        # is the orchestrator's own letter, written from customer payloads and
+        # code-only blockers. It cannot name a cash balance, a margin, a stock
+        # count or an internal `detail` string, because none of them was ever
+        # in its context to name.
+        customer_message=result.output,
+        resume_token=token,
+    )
+
+
+def _as_request(
+    deps: AgentDeps, request_with_date: str, request_date: str
+) -> CustomerRequest:
+    """The request as it arrived, for a suspension to be resumed from.
+
+    `deadline` is not filled: nothing extracts one yet, and the date the
+    customer needs their goods by is replenishment's question in ticket 107.
+    An absent deadline is the honest answer here rather than a guessed one.
+
+    Args:
+        deps: This request's deps, carrying the trail and the journal.
+        request_with_date: The customer's prose, exactly as it arrived.
+        request_date: The ISO date it arrived on.
+
+    Returns:
+        The request, with the lines the orchestrator read out of it.
+    """
+    return CustomerRequest(
+        request_id=deps.request_id,
+        run_id=deps.trail.run_id,
+        request_date=date.fromisoformat(request_date),
+        raw_text=request_with_date,
+        deadline=None,
+        lines=deps.journal.requested_lines,
+    )

@@ -36,7 +36,14 @@ from pydantic_core import to_jsonable_python
 from sqlalchemy import text
 
 from beaver import starter
-from beaver.contract import AgentName, AgentResponse, AgentView, BlockerSignal
+from beaver.contract import (
+    AgentName,
+    AgentResponse,
+    AgentView,
+    BlockerSignal,
+    SuspendedFlow,
+)
+from beaver.outcome import RequestJournal
 
 #: Where the transcript sidecar lands, relative to the working directory the
 #: harness runs from (`project/`).
@@ -337,6 +344,42 @@ class AuditTrail:
                 ],
             )
 
+    def write_suspension(self, flow: SuspendedFlow) -> None:
+        """Write the one `suspended_flows` row a paused request leaves behind.
+
+        The flow travels whole, as JSON, rather than spread over columns: it is
+        read back by a resumption that does not exist yet, and a shape nothing
+        queries is better kept in one piece than guessed at in five. Its key,
+        its run and its request are columns anyway, because those are what a
+        reader looks a suspension *up* by.
+
+        `INSERT OR REPLACE` because the token is the request, not the attempt:
+        a request handled twice in one run has one latest suspension, and two
+        rows claiming the same token would be a trail disagreeing with itself.
+
+        Args:
+            flow: The suspended flow, with its questions and its completed steps.
+        """
+        with starter.engine().begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT OR REPLACE INTO suspended_flows (
+                      resume_token, run_id, request_id, suspended_at, payload
+                    ) VALUES (
+                      :resume_token, :run_id, :request_id, :suspended_at, :payload
+                    )
+                    """
+                ),
+                {
+                    "resume_token": flow.resume_token,
+                    "run_id": flow.run_id,
+                    "request_id": flow.request_id,
+                    "suspended_at": flow.suspended_at.isoformat(),
+                    "payload": flow.model_dump_json(),
+                },
+            )
+
     def write_transcript(self, step_id: str, messages: Any) -> None:
         """Append one delegation's raw model messages to the run's sidecar.
 
@@ -386,6 +429,13 @@ class AgentDeps:
     calls should hang off. The same object is handed to a delegate — that is
     what makes `current_step_id` reach the sub-agent's tools without any agent
     having to pass it along.
+
+    The journal rides here too, and it is deliberately *not* part of the trail:
+    the trail records what the agents did, internal halves included, while the
+    journal holds only what the orchestrator was handed. They travel together
+    because the delegation seam is the one place that sees both and can forget
+    neither — the alternative is a call site remembering to record, which is
+    the arrangement this whole module exists to avoid.
     """
 
     trail: AuditTrail
@@ -393,6 +443,11 @@ class AgentDeps:
     #: The delegation currently in flight. `None` at the orchestrator's own
     #: level, where there is no delegation to hang anything off.
     current_step_id: str | None = None
+    #: What the orchestrator has been handed about this request's lines, and
+    #: what its outcome is derived from. Filled by the seam below, so a new
+    #: delegation joins it by existing rather than by remembering. A domain
+    #: agent run on its own gets a fresh empty one and never reads it.
+    journal: RequestJournal = field(default_factory=RequestJournal)
 
 
 def delegation(agent: AgentName, name: str | None = None):
@@ -458,7 +513,13 @@ def delegation(agent: AgentName, name: str | None = None):
                 trail.write_blockers(step.step_id, response.internal.signals)
                 trail.write_transcript(step.step_id, result.new_messages())
 
-            return response.to_view()
+            # Two narrowings, and the orchestrator is on the far side of
+            # both: `to_view` drops the internal payload, and the journal drops
+            # every blocker but the one now holding its line. What the model is
+            # handed is therefore exactly what it may say — the leak guarantee
+            # and *one blocker per line* are the same guarantee, made the same
+            # way. `write_blockers` above has already recorded all of them.
+            return deps.journal.record(response.to_view())
 
         # `functools.wraps` copied the wrapped function's return annotation, and
         # that annotation is a lie about what the orchestrator's model is handed.

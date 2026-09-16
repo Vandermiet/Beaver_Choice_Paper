@@ -128,6 +128,8 @@ The shared language of the Beaver's Choice / Munder Difflin multi-agent system. 
 
 **Outcome** — How a request ended: fulfilled, partially fulfilled, rejected, or pending customer revision.
 
+**Request journal** — What the orchestrator was handed about one request's lines, accumulated as it was handed it: the lines it read out of the enquiry, and every agent view that came back. The outcome is derived from this and from nothing else, so it can state only what the orchestrator could have said — a derivation cannot disclose what a reply cannot. Distinct from the *audit trail*, which records what the agents did, including the internal halves the journal never sees.
+
 **Pending customer revision** — An outcome, not a state of waiting. The request cannot proceed until the customer amends it, so the flow is suspended and the reply asks the revision questions. Reachable only before any line is committed — once money has moved, the request ends in an outcome rather than a question. Nothing in a harness run resumes it; the customer has no channel to answer.
 
 **Revision query** — One question put to the customer, arising from one revisable blocker.

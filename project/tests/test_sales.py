@@ -20,14 +20,15 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_core import to_jsonable_python
 from sqlalchemy import text
 
-from beaver import orchestrator, starter
+from tests.messages import PRICED, handed_down, handed_up
+
+from beaver import ledger, orchestrator, starter
 from beaver.audit import AgentDeps
 from beaver.contract import AgentName, BlockerCode
 from beaver.inventory.agent import inventory_agent
 from beaver.orchestrator import orchestrator_agent
 from beaver.quoting.agent import quoting_agent
 from beaver.quoting.tools import price_line, price_of, quote_total
-from beaver.sales import tools
 from beaver.sales.agent import sales_agent
 from beaver.sales.models import LineVerdict
 from beaver.sales.tools import (
@@ -499,7 +500,7 @@ class TestTheWriteLock:
             return rowid
 
         monkeypatch.setattr(starter, "create_transaction", slow)
-        monkeypatch.setattr(tools, "_write_lock", contextlib.nullcontext())
+        monkeypatch.setattr(ledger, "write_lock", contextlib.nullcontext())
 
         async def commit(item_name: str, line_id: str):
             return await record_sale(
@@ -632,7 +633,7 @@ def scripted_flow(lines, as_of_date: str = REQUEST_DATE, seen: list | None = Non
                 ]
             )
         if "snapshot_financials" in tools:
-            quoted = [line for line in _last_sales_request(messages)]
+            quoted = handed_down(messages, PRICED)
             if len(messages) == 1:
                 return ModelResponse(
                     parts=[
@@ -670,32 +671,6 @@ def scripted_flow(lines, as_of_date: str = REQUEST_DATE, seen: list | None = Non
         )
 
     return FunctionModel(model)
-
-
-def handed_up(messages, tool_name: str) -> dict:
-    """One delegation's customer payload, out of the orchestrator's own context."""
-    for message in messages:
-        for part in getattr(message, "parts", []):
-            if getattr(part, "tool_name", None) != tool_name:
-                continue
-            payload = to_jsonable_python(getattr(part, "content", None))
-            if isinstance(payload, dict) and "customer" in payload:
-                return payload["customer"]
-    return {}
-
-
-def _last_sales_request(messages) -> list[dict]:
-    """The priced lines as the delegation's prompt carried them into sales."""
-    for message in reversed(messages):
-        for part in getattr(message, "parts", []):
-            content = getattr(part, "content", None)
-            if isinstance(content, str) and '"quote_line_id"' in content:
-                return [
-                    json.loads(line)
-                    for line in content.splitlines()
-                    if line.startswith("{")
-                ]
-    return []
 
 
 def a_letter(sales: dict) -> str:
@@ -768,14 +743,16 @@ class TestThroughTheOrchestrator:
         assert link["request_id"] == "1"
 
     async def test_the_reply_states_the_delivery_date_for_what_we_sold(self):
-        reply = await self.handle([("L1", "Cardstock", 500)])
-        assert "500 units of Cardstock for $71.25" in reply
-        assert f"delivered on {REQUEST_DATE}" in reply
+        resolution = await self.handle([("L1", "Cardstock", 500)])
+        assert "500 units of Cardstock for $71.25" in resolution.customer_message
+        assert f"delivered on {REQUEST_DATE}" in resolution.customer_message
 
     async def test_a_short_line_is_declined_and_its_sibling_still_sells(self):
-        reply = await self.handle([("L1", "A4 paper", 500), ("L2", "Cardstock", 500)])
-        assert "unable to supply A4 paper" in reply
-        assert "500 units of Cardstock" in reply
+        resolution = await self.handle(
+            [("L1", "A4 paper", 500), ("L2", "Cardstock", 500)]
+        )
+        assert "unable to supply A4 paper" in resolution.customer_message
+        assert "500 units of Cardstock" in resolution.customer_message
         assert [row["item_name"] for row in sales_rows()] == ["Cardstock"]
 
     async def test_the_short_line_reaches_the_orchestrator_as_a_code_and_a_line(self):

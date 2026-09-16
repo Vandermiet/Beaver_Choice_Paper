@@ -672,13 +672,21 @@ def run_test_scenarios():
         ############
         ############
 
-        response = asyncio.run(
+        resolution = asyncio.run(
             handle_request(
                 request_with_date,
                 request_date=request_date,
                 request_id=idx + 1,
             )
         )
+        # The harness prints and records one string per request. The outcome
+        # and the resume token are the orchestrator's own answer about how the
+        # request ended, and they go to the console beside the reply rather
+        # than into the results frame, whose columns are the provided ones.
+        response = resolution.customer_message
+        print(f"Outcome: {resolution.outcome}")
+        if resolution.resume_token:
+            print(f"Suspended, resumable as: {resolution.resume_token}")
 
         # Update state
         report = generate_financial_report(request_date)

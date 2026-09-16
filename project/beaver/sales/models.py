@@ -25,7 +25,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
-from beaver.contract import AgentResponse, CarriedItemName, InternalPayload
+from beaver.contract import AgentResponse, CarriedItemName, MovesCash
 from beaver.quoting.models import QuotedLine
 
 
@@ -117,16 +117,15 @@ class SalesCustomerPayload(BaseModel):
     promised_delivery_date: date | None
 
 
-class SalesInternalPayload(InternalPayload):
+class SalesInternalPayload(MovesCash):
     """What only the trail sees: the money, the stock read, and the rowids.
 
-    `cash_after - cash_before` is one pass's cash movement. The per-request
-    delta spans both passes of the bounded retry and is measured by the
-    orchestrator, which is the only thing that sees both (#10).
+    `cash_before` and `cash_after` come from `MovesCash`: they are one pass's
+    cash movement, and the per-request delta spans both passes of the bounded
+    retry and is measured by the orchestrator, which is the only thing that
+    sees both (#10).
     """
 
-    cash_before: float
-    cash_after: float
     #: The commit-time re-check, keyed by item. Every key is on this order.
     stock_read_by_item: dict[str, int]
     #: `line_id` -> `transactions.rowid`. The other half of the commitment

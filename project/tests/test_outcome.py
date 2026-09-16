@@ -19,7 +19,8 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_core import to_jsonable_python
 from sqlalchemy import text
 
-from tests.messages import PRICED, RESOLVED, handed_down, handed_up
+from tests.messages import PRICED, RESOLVED, handed_down, handed_up, returned
+from tests.turns import replenishment_turn
 
 from beaver import orchestrator, starter
 from beaver.contract import (
@@ -40,6 +41,7 @@ from beaver.outcome import (
     spoken_blockers,
 )
 from beaver.quoting.agent import quoting_agent
+from beaver.replenishment.agent import replenishment_agent
 from beaver.sales.agent import sales_agent
 from beaver.sales.models import CommittedLine, DeclinedLine, SalesCustomerPayload
 
@@ -463,6 +465,8 @@ def scripted_request(lines, as_of_date: str = REQUEST_DATE):
             return _quoting_turn(messages, as_of_date)
         if "snapshot_financials" in names:
             return _sales_turn(messages, as_of_date)
+        if "reorder_thresholds" in names:
+            return replenishment_turn(messages)
         return _inventory_turn(messages, stated, as_of_date)
 
     return FunctionModel(model)
@@ -487,10 +491,16 @@ def _orchestrator_turn(messages, stated, as_of_date: str) -> ModelResponse:
         return ModelResponse(
             parts=[
                 ToolCallPart(
-                    "consult_sales",
+                    "place_order",
                     {
                         "lines": handed_up(messages, "consult_quoting")["quoted_lines"],
                         "as_of_date": as_of_date,
+                        # The request date itself. These tests are about how a
+                        # request *ends*, not about the retry, and a same-day
+                        # deadline keeps the purse shut: no supplier reaches us
+                        # on the day we order, so a short line stays short and
+                        # the outcome under test is the one being asserted.
+                        "deadline": as_of_date,
                     },
                 )
             ]
@@ -563,6 +573,7 @@ _ASKS = {
     "unit_not_understood": "how many sheets of {item}",
     "item_not_carried": "we do not sell {item}",
     "insufficient_stock": "we are unable to supply {item} at present",
+    "deadline_unmeetable": "we could not get {item} to you by the date you need it",
 }
 
 
@@ -582,14 +593,14 @@ def a_letter(messages, stated) -> str:
         The letter.
     """
     said_as = {line["line_id"]: line["item_as_stated"] for line in stated}
-    sales = handed_up(messages, "consult_sales")
+    sales = returned(messages, "place_order")
     sentences = [
         f"{line['units']} units of {line['item_name']} for ${line['line_total']:.2f}"
         for line in sales.get("committed", [])
     ]
     if sales.get("promised_delivery_date"):
         sentences.append(f"delivered on {sales['promised_delivery_date']}")
-    for tool_name in ("consult_inventory", "consult_quoting", "consult_sales"):
+    for tool_name in ("consult_inventory", "consult_quoting", "place_order"):
         for blocker in _blockers_of(messages, tool_name):
             item = said_as.get(blocker["line_id"], "that line")
             sentences.append(_ASKS[blocker["code"]].format(item=item))
@@ -623,6 +634,7 @@ class TestThroughTheOrchestrator:
             inventory_agent.override(model=model),
             quoting_agent.override(model=model),
             sales_agent.override(model=model),
+            replenishment_agent.override(model=model),
         ):
             return await orchestrator.handle_request(
                 "I would like to place an order. (Date of request: 2025-04-01)",

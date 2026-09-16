@@ -1,4 +1,4 @@
-"""The audit trail: six tables in `munder_difflin.db` plus a JSONL transcript
+"""The audit trail: seven tables in `munder_difflin.db` plus a JSONL transcript
 sidecar, written by a decorator at the delegation seam.
 
 Filled by ticket 102. The DDL is on issues #5, #7 and #10. `bootstrap_audit()`
@@ -25,7 +25,7 @@ import itertools
 import json
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -41,6 +41,7 @@ from beaver.contract import (
     AgentResponse,
     AgentView,
     BlockerSignal,
+    MovesCash,
     SuspendedFlow,
 )
 from beaver.outcome import RequestJournal
@@ -49,7 +50,7 @@ from beaver.outcome import RequestJournal
 #: harness runs from (`project/`).
 TRANSCRIPT_DIR = Path("audit")
 
-#: The six tables, created alongside `init_database`'s four rather than by it.
+#: The seven tables, created alongside `init_database`'s four rather than by it.
 #: `IF NOT EXISTS` because rows accumulate across runs — a clean run means
 #: deleting the `.db` file, not dropping these.
 AUDIT_DDL: tuple[str, ...] = (
@@ -116,10 +117,21 @@ AUDIT_DDL: tuple[str, ...] = (
       quote_line_id     TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS request_cash (
+      run_id      TEXT NOT NULL,
+      request_id  TEXT NOT NULL,
+      cash_before REAL NOT NULL,
+      cash_after  REAL NOT NULL,
+      cash_delta  REAL NOT NULL,
+      measured_at TEXT NOT NULL,
+      PRIMARY KEY (run_id, request_id)
+    )
+    """,
 )
 
 def bootstrap_audit() -> None:
-    """Create the six audit tables, if they are not already there.
+    """Create the seven audit tables, if they are not already there.
 
     Call this *after* `init_database`. That order matters only because
     `init_database` replaces its own four tables and could otherwise be thought
@@ -380,6 +392,54 @@ class AuditTrail:
                 },
             )
 
+    def write_cash(self, request_id: str, cash: RequestCash) -> None:
+        """Write the one `request_cash` row a request that moved money leaves behind.
+
+        The per-request delta, which no single envelope holds: a sale, a
+        purchase and a second sale are three steps with three deltas of their
+        own, and what the books actually did over the request is the balance
+        before the first against the balance after the last. The orchestrator
+        is the only thing that sees all three, so it is the only thing that can
+        write this row.
+
+        A request that never reached a cash-moving step writes nothing; one
+        that reached it and moved nought writes a row saying so, because
+        "we weighed this request and it changed the balance by nothing" is a
+        different fact from "we never weighed it". "Which requests moved cash?"
+        is then `WHERE cash_delta != 0`.
+
+        `INSERT OR REPLACE` for the reason `suspended_flows` uses it: the key
+        is the request, not the attempt.
+
+        Args:
+            request_id: The request the money moved for.
+            cash: The readings the seam collected, first before and last after.
+        """
+        if not cash.observed:
+            return
+        with starter.engine().begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT OR REPLACE INTO request_cash (
+                      run_id, request_id, cash_before, cash_after, cash_delta,
+                      measured_at
+                    ) VALUES (
+                      :run_id, :request_id, :cash_before, :cash_after, :cash_delta,
+                      :measured_at
+                    )
+                    """
+                ),
+                {
+                    "run_id": self.run_id,
+                    "request_id": request_id,
+                    "cash_before": cash.before,
+                    "cash_after": cash.after,
+                    "cash_delta": cash.delta,
+                    "measured_at": _now(),
+                },
+            )
+
     def write_transcript(self, step_id: str, messages: Any) -> None:
         """Append one delegation's raw model messages to the run's sidecar.
 
@@ -421,6 +481,59 @@ class AuditTrail:
 
 
 @dataclass
+class RequestCash:
+    """The books either side of everything one request did to them.
+
+    Filled by the delegation seam from the internal half of every `MovesCash`
+    step, and so never by a call site that could forget. It is the measurement
+    the bounded retry made necessary: sales' pass 1, replenishment's purchase
+    and sales' pass 2 each report their own movement, and none of them is the
+    request's. The first reading taken and the last one taken are, because
+    nothing else in the run wrote between them on this request's behalf.
+
+    It rides on `AgentDeps` beside the journal, and it is the opposite of the
+    journal in what it holds: the journal is what the orchestrator was handed,
+    and this is what the seam withheld from it. Neither reaches the model.
+    """
+
+    #: The balance before the first step that moved money. `None` until one has.
+    before: float | None = None
+    #: The balance after the most recent one.
+    after: float | None = None
+
+    def observe(self, payload: MovesCash) -> None:
+        """Take one cash-moving step's readings into the request's own pair.
+
+        Args:
+            payload: The internal half of a step that wrote to `transactions`.
+        """
+        if self.before is None:
+            self.before = payload.cash_before
+        self.after = payload.cash_after
+
+    @property
+    def observed(self) -> bool:
+        """Whether any step of this request weighed the books at all.
+
+        True the moment sales or replenishment has run, whether or not it
+        moved anything: a pass that committed nothing still read the balance
+        either side of the writes it did not make.
+        """
+        return self.before is not None
+
+    @property
+    def delta(self) -> float:
+        """What the request did to the balance, to the cent.
+
+        Returns:
+            The last reading less the first, or nought if nothing weighed it.
+        """
+        if self.before is None or self.after is None:
+            return 0.0
+        return round(self.after - self.before, 2)
+
+
+@dataclass
 class AgentDeps:
     """What every agent in the system is run with.
 
@@ -448,6 +561,18 @@ class AgentDeps:
     #: delegation joins it by existing rather than by remembering. A domain
     #: agent run on its own gets a fresh empty one and never reads it.
     journal: RequestJournal = field(default_factory=RequestJournal)
+    #: The books either side of this request, collected from the internal
+    #: halves the journal never sees. Filled by the same seam, and for the same
+    #: reason: a measurement a call site can forget is one that reports nought
+    #: for a request that moved thousands.
+    cash: RequestCash = field(default_factory=RequestCash)
+    #: When stock bought in for this request reaches us, by item name. The one
+    #: thing the orchestrator routes *into* a delegation rather than around it,
+    #: and it travels here rather than through the prompt because a delivery
+    #: promise must be exact: a date the model paraphrased, dropped or moved
+    #: would promise goods that are not in the building. Empty on a first pass
+    #: and for any agent that never buys anything in.
+    earliest_availability: dict[str, date] = field(default_factory=dict)
 
 
 def delegation(agent: AgentName, name: str | None = None):
@@ -510,6 +635,12 @@ def delegation(agent: AgentName, name: str | None = None):
                         f"expected {step.step_id!r}"
                     )
                 step.outputs = response
+                if isinstance(response.internal, MovesCash):
+                    # Recognised by type rather than by name: an agent that
+                    # starts writing to `transactions` is counted towards the
+                    # request's cash delta by declaring what it is, not by a
+                    # call site here remembering to add it.
+                    deps.cash.observe(response.internal)
                 trail.write_blockers(step.step_id, response.internal.signals)
                 trail.write_transcript(step.step_id, result.new_messages())
 

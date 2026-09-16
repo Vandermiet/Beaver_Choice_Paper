@@ -10,9 +10,11 @@ them, quoting prices what resolved, sales commits what we hold and writes the
 money, and the reply is composed here from what came back. Ticket 106 gave the
 request an end: every one now returns a stated outcome, and a request that
 cannot proceed comes back as one message asking all of its questions at once.
-Replenishment and the bounded retry land in tickets 107-108.
+Ticket 108 closed the sequence with the bounded retry — a line we are short of
+is bought in and offered once more — which makes this module the only place in
+the system that sees a request whole.
 
-Three boundaries this module exists to hold:
+Four boundaries this module exists to hold:
 
 - **The orchestrator extracts; inventory resolves.** The lines it emits carry
   the customer's own words, the quantity as stated and the unit as stated. It
@@ -24,6 +26,12 @@ Three boundaries this module exists to hold:
   of them could: an agent sees only its own lines. The derivation is ordinary
   function code in `beaver.outcome`, over the journal the seam fills, so how a
   request ended is testable without a model and cannot be a model's opinion.
+- **The orchestrator drives the retry; it does not ask a model to.** Whether to
+  buy, what to offer again and what the two passes came to are decided in
+  `place_order` by ordinary code over `beaver.retry`, because a model that
+  offered a committed line for commitment a second time would write the same
+  sale twice, and nothing in this database can be taken back. The model's part
+  is the one tool call and the letter that follows it.
 """
 
 import functools
@@ -31,7 +39,7 @@ import logging
 from datetime import date
 
 from pydantic import BaseModel
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.usage import UsageLimits
 
 from beaver.audit import AgentDeps, AuditTrail, delegation, new_run_id
@@ -45,9 +53,18 @@ from beaver.contract import (
 from beaver.inventory.agent import inventory_agent
 from beaver.inventory.models import ResolvedLine
 from beaver.llm import shared_model
-from beaver.outcome import derive_outcome, suspend
+from beaver.outcome import derive_outcome, spoken_blockers, suspend
 from beaver.quoting.agent import quoting_agent
 from beaver.quoting.models import QuotedLine
+from beaver.replenishment.agent import replenishment_agent
+from beaver.replenishment.models import RestockRequest
+from beaver.retry import (
+    PlacedOrder,
+    availability_of,
+    lines_to_retry,
+    merge_passes,
+    restocks_for,
+)
 from beaver.sales.agent import sales_agent
 
 INSTRUCTIONS = """
@@ -83,18 +100,25 @@ a price for each line: the units, the price per unit, the total before any
 discount, the discount band and rate the line earned, and the total after it.
 Skip this step only when inventory resolved nothing at all.
 
-Then call `consult_sales` **once**, passing every priced line exactly as
-quoting returned it, with the same date. It places the order: it answers with
-the lines we committed and the date each will be delivered, the lines we could
-not, and what the order came to. A line it could not commit comes back with one
-more blocker:
+Then call `place_order` **once**, passing every priced line exactly as quoting
+returned it, with the same date, and the date the customer needs the goods by
+if they named one — read it out of their own words and give it as
+`YYYY-MM-DD`. It places the order: where we are short of something it buys it
+in and tries that line once more, and it answers with the lines we committed
+and the date each will be delivered, the lines we could not, and what the order
+came to. A line it could not commit comes back with one more blocker:
 
 - `insufficient_stock` — we do not hold enough of that to fill the line. Say
   that we are unable to supply that line at present, without saying how much we
   hold or how short we are, and never offer a partial quantity: the line was
   declined whole.
+- `deadline_unmeetable` — we could have got it, but not by the date they need
+  it. Say that we cannot supply that line by the date they gave, and ask
+  whether a later date would suit. You were given no alternative date, so do
+  not name one: a date we have not promised is a date we cannot keep.
 
-Skip this step only when nothing was priced.
+Skip this step only when nothing was priced. Never call it twice: it makes its
+own second attempt, and a second call would sell the same line again.
 
 Finally write the reply. Your entire answer **is** the letter — a short, warm,
 professional message that a customer could read as it stands. Do not show your
@@ -102,7 +126,7 @@ working, do not list the request back with its line numbers, do not write
 headings like "Requested Lines" or "Reply", and do not sign it with a
 placeholder name: sign off as Beaver's Choice Paper Company.
 
-Confirm the lines sales committed by the name we sell them as and the quantity
+Confirm the lines we committed by the name we sell them as and the quantity
 they asked for — those are orders placed, not offers. Address every line we
 could not supply, in the customer's own terms, and put all of your questions
 together in one place so one round of correspondence clears them. This letter
@@ -110,7 +134,7 @@ is the only message they will get, so never say that you will follow up, come
 back to them, or write again about a line: whatever you need to know, ask it
 here.
 
-State the price of every line sales committed, in its own words: how many
+State the price of every line we committed, in its own words: how many
 units, at what price each, and what that comes to. Do not price a line we
 could not supply: a price with no order behind it reads as a sale we did not
 make. Where a line earned a
@@ -120,8 +144,8 @@ about discounts at all: a discount sentence on every line makes the real ones
 invisible. Use the figures you were given exactly as they are, to the cent;
 never calculate one, round one, or offer a discount that was not quoted.
 
-State the delivery date sales gave you for the lines it committed, exactly as
-it gave it to you. Never state a price for a line that was not priced, never
+State the delivery date you were given for the lines we committed, exactly as
+you were given it. Never state a price for a line that was not priced, never
 promise a date for a line that was not committed, and never invent or move a
 date: a delivery promise the business has not made is one it cannot keep.
 Never mention stock levels,
@@ -204,28 +228,156 @@ async def consult_quoting(
 
 
 @orchestrator_agent.tool
-@delegation(AgentName.SALES)
-async def consult_sales(
+async def place_order(
     ctx: RunContext[AgentDeps],
     lines: list[QuotedLine],
     as_of_date: str,
-):
-    """Ask sales to place the order: which priced lines can we commit today?
+    deadline: date | None = None,
+) -> PlacedOrder:
+    """Place the order: commit what we hold, buy in what we are short of, commit that.
 
-    Give it every line quoting priced, exactly as quoting returned it. Sales
-    re-reads the shelf at the moment of commitment, so a line inventory saw
-    stock for may still be declined — and a line it commits has been sold.
+    The whole commitment sequence, and the only tool of this agent's that is
+    more than one delegation. It is driven here rather than by you because a
+    line offered for commitment twice is a sale written twice, and no apology
+    undoes that. Call it once and read the answer.
 
     Args:
         lines: The lines quoting priced, exactly as it returned them.
         as_of_date: The date the request arrived, as `YYYY-MM-DD`.
+        deadline: The date the customer needs the goods by, as `YYYY-MM-DD`, if
+            they named one. It decides nothing about stock we already hold; it
+            decides whether stock we would have to buy in could arrive in time.
 
     Returns:
         The lines we committed with the date each is promised for, the lines we
-        could not commit, and what the order came to.
+        could not commit and what now stands against each, and what the order
+        came to.
     """
-    return await sales_agent.run(
-        _ask("Commit what we can of these priced lines", lines, as_of_date),
+    deps = ctx.deps
+    if deps.journal.order_placed:
+        # Structural rather than instructed. The instructions say to call this
+        # once, and an instruction is one model turn away from a second sale of
+        # a line we have already written to `transactions` — which nothing in
+        # this database can undo.
+        raise ModelRetry(
+            "This order has already been placed. Write the reply from the "
+            "answer you were given; do not place it again."
+        )
+    # Recorded here because this is where the deadline is first stated, and it
+    # belongs to the request rather than to this step: a suspension persists it
+    # as part of the enquiry as it arrived.
+    deps.journal.deadline = deadline
+
+    first = await _commit(ctx, lines, as_of_date)
+
+    # The purse opens on sales' declines, sized by inventory's measurement of
+    # them. Both halves came up through the seam; nothing here reads a shelf.
+    needs = restocks_for(first.blockers, deps.journal.restock_needs)
+    second = None
+    if needs:
+        bought = await _buy(
+            ctx,
+            RestockRequest(
+                request_date=date.fromisoformat(as_of_date),
+                deadline=deadline,
+                needs=needs,
+                # What this request has already paid us is not ours to spend:
+                # sales has written it to `transactions`, so the balance
+                # replenishment reads includes money we are about to lay out
+                # against the same order.
+                committed_revenue=first.customer.order_total,
+            ),
+        )
+        # Only the lines we actually bought for, and exactly once: this is the
+        # bound on the retry, and it is a bound because `_commit` is never
+        # reached again from here.
+        retry = lines_to_retry(lines, bought.customer.restocked)
+        if retry:
+            second = await _commit(
+                ctx, retry, as_of_date, availability_of(bought.customer.restocked)
+            )
+
+    return merge_passes(
+        first.customer,
+        second.customer if second else None,
+        # The journal's own precedence, across every pass: a line short on pass
+        # 1 and refused on the delivery date is told about the date, because by
+        # then we are no longer out of it.
+        spoken_blockers(deps.journal),
+    )
+
+
+@delegation(AgentName.SALES)
+async def _commit(
+    ctx: RunContext[AgentDeps],
+    lines: list[QuotedLine],
+    as_of_date: str,
+    availability: dict[str, date] | None = None,
+):
+    """Ask sales to commit these priced lines, and write the money for them.
+
+    Sales re-reads the shelf at the moment of commitment, so a line inventory
+    saw stock for may still be declined — and a line it commits has been sold.
+    It is stateless and never learns which pass this is, which is exactly what
+    makes calling it twice safe: it can only sell what it is offered, and it is
+    never offered a line that has already sold.
+
+    Not registered as a tool: the model calls `place_order`, which calls this.
+    The step it writes to the trail is a delegation all the same.
+
+    Args:
+        ctx: The run context, carrying the trail and the journal.
+        lines: The priced lines to offer for commitment.
+        as_of_date: The date the request arrived, as `YYYY-MM-DD`.
+        availability: When stock bought in for this request reaches us, by item
+            name. `None` on pass 1, when nothing has been bought. It is
+            routed on the deps rather than into the prompt, so no model stands
+            between replenishment's date and the promise made from it.
+
+    Returns:
+        Sales' envelope, for the seam to narrow.
+    """
+    deps = ctx.deps
+    # Routed on the deps rather than in the prompt, and restored afterwards for
+    # the same reason `current_step_id` is: one request's deps outlive one
+    # delegation. Sales' output function reads it there, so the date we promise
+    # goods we do not yet hold is never a date a model retyped.
+    deps.earliest_availability = availability or {}
+    try:
+        return await sales_agent.run(
+            _ask("Commit what we can of these priced lines", lines, as_of_date),
+            deps=deps,
+            usage=ctx.usage,
+            model=shared_model(),
+        )
+    finally:
+        deps.earliest_availability = {}
+
+
+@delegation(AgentName.REPLENISHMENT)
+async def _buy(ctx: RunContext[AgentDeps], request: RestockRequest):
+    """Ask replenishment to buy in the shortfalls sales refused for want of stock.
+
+    Every purchase this business makes arrives here, and every one of them is
+    traceable to a customer who asked for something we did not have. What comes
+    back is the items now on their way to us and the date each can be promised
+    from; a need it refused is absent, and its reason comes up as a blocker.
+
+    Not registered as a tool, for the reason `_commit` is not: the purse opens
+    on a decline, not on a model deciding to open it.
+
+    Args:
+        ctx: The run context, carrying the trail and the journal.
+        request: The shortfalls, the date, the deadline and what this request
+            has already earned us.
+
+    Returns:
+        Replenishment's envelope, for the seam to narrow.
+    """
+    return await replenishment_agent.run(
+        f"The request arrived on {request.request_date.isoformat()}. "
+        "Buy what we were refused for want of stock:\n"
+        + request.model_dump_json(),
         deps=ctx.deps,
         usage=ctx.usage,
         model=shared_model(),
@@ -257,10 +409,11 @@ def _ask(instruction: str, lines: list[BaseModel], as_of_date: str) -> str:
 #: orchestrator and everything it delegates to. A model that loops instead of
 #: answering is the failure this bounds, and it is a real one: an early run
 #: watched one request call `check_stock` eighty-two times and take the other
-#: nineteen requests down with it. Twenty is about twice a healthy request's
-#: cost with three delegations in the sequence — the orchestrator's own turns
-#: plus a handful each for inventory, quoting and sales.
-REQUEST_BUDGET = UsageLimits(request_limit=20)
+#: nineteen requests down with it. Thirty is about twice a healthy request's
+#: cost at its longest — the orchestrator's own turns plus a handful each for
+#: inventory, quoting and sales, and, on a request that goes short,
+#: replenishment and sales again.
+REQUEST_BUDGET = UsageLimits(request_limit=30)
 
 _log = logging.getLogger(__name__)
 
@@ -336,6 +489,12 @@ async def handle_request(
             customer_message=APOLOGY,
             resume_token=None,
         )
+    finally:
+        # In a `finally` because money that moved before a crash moved all the
+        # same: a request that sold a line and then fell over is exactly the
+        # one an auditor needs the row for, and it is the one path on which a
+        # write at the end of the happy branch would never run.
+        run_trail.write_cash(deps.request_id, deps.cash)
     return RequestResolution(
         request_id=str(request_id),
         outcome=outcome,
@@ -354,9 +513,10 @@ def _as_request(
 ) -> CustomerRequest:
     """The request as it arrived, for a suspension to be resumed from.
 
-    `deadline` is not filled: nothing extracts one yet, and the date the
-    customer needs their goods by is replenishment's question in ticket 107.
-    An absent deadline is the honest answer here rather than a guessed one.
+    `deadline` comes from the journal, where `place_order` recorded what the
+    orchestrator read out of the customer's prose. A request that suspends
+    never reaches that step, so it carries none — and `None` is the honest
+    answer there rather than a guessed one.
 
     Args:
         deps: This request's deps, carrying the trail and the journal.
@@ -371,6 +531,6 @@ def _as_request(
         run_id=deps.trail.run_id,
         request_date=date.fromisoformat(request_date),
         raw_text=request_with_date,
-        deadline=None,
+        deadline=deps.journal.deadline,
         lines=deps.journal.requested_lines,
     )

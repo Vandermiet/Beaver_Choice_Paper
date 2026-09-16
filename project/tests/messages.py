@@ -4,8 +4,8 @@ Every orchestrator-level test drives the real hand-off rather than constants:
 what one delegation returns is what the next one is called with. That means the
 script has to read the run it is in the middle of, and these three functions are
 how. They belong here rather than in one test module because `test_sales.py`,
-`test_outcome.py` and every flow test after them need the same two reads —
-what a delegation handed *up*, and what a delegation was handed *down*.
+`test_outcome.py`, `test_retry.py` and every flow test after them need the same
+reads — what a delegation handed *up*, and what a delegation was handed *down*.
 
 They are plumbing, not assertions: nothing here knows a business rule, and a
 test that needs one states it itself.
@@ -30,13 +30,31 @@ def handed_up(messages: list[Any], tool_name: str) -> dict:
     Returns:
         The customer half of what that delegation handed up, or `{}`.
     """
+    payload = returned(messages, tool_name)
+    return payload.get("customer", {})
+
+
+def returned(messages: list[Any], tool_name: str) -> dict:
+    """Whatever one of the orchestrator's tools handed back, whole.
+
+    `handed_up` unwraps a delegation's envelope; this does not, because not
+    every tool returns one — `place_order` drives three delegations and merges
+    the answer into a shape of its own.
+
+    Args:
+        messages: The orchestrator's messages so far.
+        tool_name: The tool whose return to read.
+
+    Returns:
+        What that tool returned, or `{}`.
+    """
     for message in reversed(messages):
         for part in getattr(message, "parts", []):
             if getattr(part, "tool_name", None) != tool_name:
                 continue
             payload = to_jsonable_python(getattr(part, "content", None))
-            if isinstance(payload, dict) and "customer" in payload:
-                return payload["customer"]
+            if isinstance(payload, dict):
+                return payload
     return {}
 
 
@@ -70,3 +88,5 @@ def handed_down(messages: list[Any], marker: str) -> list[dict]:
 RESOLVED = '"item_name"'
 #: The field quoting mints, so it marks a priced line and only a priced line.
 PRICED = '"quote_line_id"'
+#: The field a shortfall carries, so it marks the prompt replenishment reads.
+NEEDS = '"shortfall_units"'

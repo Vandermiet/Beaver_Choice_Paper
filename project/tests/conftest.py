@@ -49,7 +49,7 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture
 def trail(seeded_db, tmp_path):
-    """A trail on a seeded database that has the six audit tables alongside its four.
+    """A trail on a seeded database that has the seven audit tables alongside its four.
 
     The `run_id` is fixed rather than minted, so a test can assert on step ids.
     The transcript sidecar is redirected into `tmp_path`, so a test run never

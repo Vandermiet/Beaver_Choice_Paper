@@ -24,7 +24,7 @@ Three rules this module exists to make structural rather than hoped for:
 """
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from beaver.contract import (
     PAUSING,
@@ -37,6 +37,8 @@ from beaver.contract import (
     RevisionQuery,
     SuspendedFlow,
 )
+from beaver.inventory.models import InventoryCustomerPayload, RestockNeed
+from beaver.replenishment.models import ReplenishmentCustomerPayload
 from beaver.sales.models import SalesCustomerPayload
 
 #: Where each code sits in the order the orchestrator speaks them, lowest
@@ -113,6 +115,12 @@ class RequestJournal:
     requested_lines: list[RequestedLine] = field(default_factory=list)
     #: Every view the seam handed up, in the order the delegations returned.
     views: list[AgentView] = field(default_factory=list)
+    #: The date the customer needs the goods by, as the orchestrator read it
+    #: out of their prose. Recorded where it is first stated, which is the
+    #: commitment sequence — the one step that needs it, because only a
+    #: purchase can miss a date. A request that never got that far has none,
+    #: and `None` is the honest answer rather than a guessed one.
+    deadline: date | None = None
 
     def record(self, view: AgentView) -> AgentView:
         """Take one delegation's view into the journal, and narrow what it says.
@@ -154,6 +162,41 @@ class RequestJournal:
         return [blocker for view in self.views for blocker in view.blockers]
 
     @property
+    def order_placed(self) -> bool:
+        """Whether this request has already been through the order desk.
+
+        The guard on the one tool that cannot be called twice: a second
+        commitment sequence would offer lines we have already sold.
+        """
+        return any(
+            isinstance(view.customer, SalesCustomerPayload) for view in self.views
+        )
+
+    @property
+    def restock_needs(self) -> list[RestockNeed]:
+        """Every shortfall inventory measured, in the order it measured them.
+
+        Half of what sizes the bounded retry's purchase; sales' declines are
+        the other half, and the orchestrator is the only thing holding both.
+        """
+        return [
+            need
+            for view in self.views
+            if isinstance(view.customer, InventoryCustomerPayload)
+            for need in view.customer.restock_needs
+        ]
+
+    @property
+    def restocked_line_ids(self) -> set[str]:
+        """The lines we bought stock in for, across however many purchases."""
+        return {
+            item.line_id
+            for view in self.views
+            if isinstance(view.customer, ReplenishmentCustomerPayload)
+            for item in view.customer.restocked
+        }
+
+    @property
     def committed_line_ids(self) -> set[str]:
         """The lines that were sold, across however many passes there were."""
         return {
@@ -167,12 +210,13 @@ class RequestJournal:
     def money_moved(self) -> bool:
         """Whether anything irreversible has happened to the books yet.
 
-        A commitment today; replenishment's spend joins it when the purse opens
-        on sales' declines in ticket 108. It is a separate question from
-        "did anything commit?" precisely because a restock can leave a request
-        with no committed line and money already out of the door.
+        A commitment or a purchase. It is a separate question from "did
+        anything commit?" precisely because a restock can leave a request with
+        no committed line and money already out of the door — pass 2 is the one
+        place that can happen, and it is why a request cannot suspend after the
+        purse has opened.
         """
-        return bool(self.committed_line_ids)
+        return bool(self.committed_line_ids or self.restocked_line_ids)
 
     @property
     def completed_step_ids(self) -> list[str]:
@@ -267,10 +311,10 @@ def derive_outcome(journal: RequestJournal) -> Outcome:
 
     if any(code.pausing for code in spoken_blockers(journal).values()):
         # Not "a revisable blocker", and not "before commitment" as a separate
-        # test: `money_moved` is false here by construction, because nothing
-        # committed. The guard stays explicit so that ticket 108's restock —
-        # money out with no line sold — closes this door rather than finding it
-        # already shut for the wrong reason.
+        # test: nothing committed, so only the retry's purchase can have moved
+        # money here — a restock we paid for and then failed to sell. That is
+        # the door this guard closes, and it is a real one rather than a
+        # formality left over from the passes that cannot reach it.
         if not journal.money_moved:
             return Outcome.PENDING_CUSTOMER_REVISION
     return Outcome.REJECTED

@@ -211,6 +211,25 @@ class InternalPayload(BaseModel):
     signals: list[BlockerSignal] = []
 
 
+class MovesCash(InternalPayload):
+    """The internal half of an agent that writes to `transactions`.
+
+    Sales and replenishment, and no others. Both read the books either side of
+    their own writes, and the pair of readings is the evidence that money
+    actually moved — which is why it is a shared base rather than the same two
+    fields declared twice: the delegation seam recognises a cash-moving step by
+    its type, and an agent that starts moving money cannot forget to be counted.
+
+    `cash_after - cash_before` is one step's movement. The per-request delta
+    spans both passes of the bounded retry and the purchase between them, and
+    is measured by the orchestrator, which is the only thing that sees all
+    three.
+    """
+
+    cash_before: float
+    cash_after: float
+
+
 TCustomer = TypeVar("TCustomer", bound=BaseModel)
 TInternal = TypeVar("TInternal", bound=InternalPayload)
 

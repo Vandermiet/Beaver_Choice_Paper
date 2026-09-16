@@ -18,9 +18,9 @@ invented quantity is still verified against stock before anything is written.
 makes it safely callable twice: the orchestrator re-calls it with only the
 lines that were short, so a committed line is never offered for commitment
 again. `SalesOrderRequest` from #10's model set is not built here — its
-`request_id`, `run_id` and `step_id` are already on `AgentDeps`, and its
-`deadline` died with #15, which left sales owning no deadline at all. What
-remains of it is this function's arguments.
+`request_id`, `run_id`, `step_id` and `earliest_availability` are already on
+`AgentDeps`, and its `deadline` died with #15, which left sales owning no
+deadline at all. What remains of it is this function's arguments.
 """
 
 from datetime import date
@@ -62,8 +62,7 @@ Work in exactly two steps, and never repeat one:
    and the date of the request, to see what we hold at this moment.
 2. Return every line you were given, unchanged: the same `line_id`, the same
    `quote_line_id`, the same `item_name`, the same `units`, the same prices and
-   the same band, plus the `as_of_date` you were given and the availability
-   dates you were given, if any.
+   the same band, plus the `as_of_date` you were given.
 
 Do not drop a line because the snapshot looks short of it — whether a line
 commits is decided after you return, against a reading taken at the moment the
@@ -78,16 +77,12 @@ async def build_sales_response(
     ctx: RunContext[AgentDeps],
     lines: list[QuotedLine],
     as_of_date: date,
-    earliest_availability: dict[str, date] | None = None,
 ) -> SalesResponse:
     """Commit every line we can fill, write the money, and build the envelope.
 
     Args:
         lines: The priced lines, exactly as they were given to you.
         as_of_date: The date the request arrived, as `YYYY-MM-DD`.
-        earliest_availability: The arrival date of any stock bought in for this
-            request, by item name, exactly as you were given it. Omit it when
-            you were given none.
 
     Returns:
         The canonical envelope: what we committed and when we will deliver it,
@@ -95,7 +90,11 @@ async def build_sales_response(
     """
     deps = ctx.deps
     ordered = _one_per_line(lines)
-    availability = earliest_availability or {}
+    # Off the deps, and deliberately not an argument the model fills: on pass 2
+    # this is the date we promise goods we do not yet hold, and a model that
+    # dropped or moved it would promise them for today. #10 carried it on
+    # `SalesOrderRequest`, which is what the orchestrator routes here.
+    availability = deps.earliest_availability
     as_of = as_of_date.isoformat()
 
     # The authoritative read: the same tool the model called, called again

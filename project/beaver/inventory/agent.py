@@ -84,7 +84,6 @@ async def build_inventory_response(
         reason for every line we refused.
     """
     resolved: list[ResolvedLine] = []
-    needs: list[RestockNeed] = []
     facts: list[LineStockFact] = []
     traces: list[ResolutionTrace] = []
     signals: list[BlockerSignal] = []
@@ -129,21 +128,14 @@ async def build_inventory_response(
                 as_of=as_of_date,
             )
         )
-        shortfall = quantity - stock_on_hand
-        if shortfall > 0:
-            needs.append(
-                RestockNeed(
-                    line_id=line.line_id,
-                    item_name=item_name,
-                    shortfall_units=shortfall,
-                )
-            )
 
     return InventoryResponse(
         agent=AgentName.INVENTORY,
         step_id=ctx.deps.current_step_id,
         request_id=ctx.deps.request_id,
-        customer=InventoryCustomerPayload(resolved_lines=resolved, restock_needs=needs),
+        customer=InventoryCustomerPayload(
+            resolved_lines=resolved, restock_needs=_needs_of(facts)
+        ),
         internal=InventoryInternalPayload(
             as_of_date=as_of_date,
             stock_facts=facts,
@@ -151,6 +143,45 @@ async def build_inventory_response(
             signals=signals,
         ),
     )
+
+
+def _needs_of(facts: list[LineStockFact]) -> list[RestockNeed]:
+    """The shortfalls, measured per item over the lines of one request.
+
+    Measured the way sales draws the shelf. Sales decrements one reading as it
+    goes, so two lines naming one item are short together or not at all, and
+    measuring each against the full reading answers a question nobody asked:
+    it subtracts the stock once per line, and it sees no shortfall at all where
+    two lines each fit alone but not together. The line that shorts only
+    because a sibling took the stock first is exactly the line a restock
+    rescues, so it gets a need here.
+
+    Args:
+        facts: The per-line readings, in the order the lines arrived. Every
+            line naming one item carries the same `stock_on_hand`, because the
+            reading is taken once per request.
+
+    Returns:
+        One need per item we are short of, in the order the items were first
+        named.
+    """
+    wanted: dict[str, int] = {}
+    stock: dict[str, int] = {}
+    lines: dict[str, list[str]] = {}
+    for fact in facts:
+        wanted[fact.item_name] = wanted.get(fact.item_name, 0) + fact.quantity_requested
+        stock[fact.item_name] = fact.stock_on_hand
+        lines.setdefault(fact.item_name, []).append(fact.line_id)
+
+    return [
+        RestockNeed(
+            line_ids=lines[item_name],
+            item_name=item_name,
+            shortfall_units=quantity - stock[item_name],
+        )
+        for item_name, quantity in wanted.items()
+        if quantity > stock[item_name]
+    ]
 
 
 def _one_per_line(lines: list[RequestedLine]) -> list[RequestedLine]:

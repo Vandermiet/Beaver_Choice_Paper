@@ -196,12 +196,12 @@ def plan_restocks(
     Everything deterministic about a purchase is known here, which is what lets
     both guards be comparisons rather than attempts.
 
-    **Needs naming one item become one purchase.** Two lines of a request can
-    resolve to the same product, and each arrives as its own `RestockNeed`. One
-    purchase per need would buy that item's floor once per line — two floors for
-    one shelf — and a purchase is in any case a thing we do with a supplier
-    about a product, not about a line. The shortfalls are summed and the floor
-    is added once.
+    **Needs naming one item become one purchase.** Inventory measures per item
+    (#36), so it is already one need per item within a request — but a batch
+    can still name one item twice, and a purchase is in any case a thing we do
+    with a supplier about a product, not about a line. The shortfalls are
+    summed and the floor is added once, so no item is ever bought two floors
+    for one shelf.
 
     A need naming an item the thresholds do not cover raises, for the reason
     `reorder_thresholds` raises: it is a divergence between the catalogue and
@@ -228,7 +228,7 @@ def plan_restocks(
         shortfall_by_item[need.item_name] = (
             shortfall_by_item.get(need.item_name, 0) + need.shortfall_units
         )
-        lines_by_item.setdefault(need.item_name, []).append(need.line_id)
+        lines_by_item.setdefault(need.item_name, []).extend(need.line_ids)
 
     plans = []
     for item_name, shortfall_units in shortfall_by_item.items():

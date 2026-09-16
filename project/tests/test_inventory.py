@@ -23,6 +23,9 @@ from beaver.inventory.agent import inventory_agent
 from beaver.inventory.models import ProductCategory, ResolutionDecision
 from beaver.inventory.tools import check_stock, list_carried_catalogue, read_stock
 from beaver.orchestrator import orchestrator_agent
+from beaver.quoting.tools import price_line, price_of
+from beaver.sales.models import LineVerdict
+from beaver.sales.tools import verify_lines
 
 STEP_ID = "20260915T120000Z:1:001"
 REPLY = "Thank you for your enquiry — we can supply the paper you asked for."
@@ -209,6 +212,86 @@ class TestTheShortfall:
         fact = response.internal.stock_facts[0]
         assert fact.quantity_requested == 10_000
         assert fact.stock_on_hand == 272
+
+
+class TestTwoLinesOnOneShelf:
+    """Two lines of one request can resolve to one item — "printer paper" and
+    "copy paper" are both `A4 paper` — and sales draws both from one reading,
+    in order. Inventory measures the same way, per item, or the shortfall it
+    emits is not the one a restock has to cover (#36)."""
+
+    #: What `A4 paper` holds on the request date at seed 137.
+    SHELF = 272
+
+    async def test_two_lines_on_one_item_are_measured_against_one_shelf(self, trail):
+        """Not the sum of two independent shortfalls: that subtracts the stock
+        once per line, and would say 156 where the truth is 428."""
+        response = await resolve(
+            lines_of(("printer paper", 400, "sheets"), ("copy paper", 300, "sheets")),
+            trail,
+        )
+        [need] = response.customer.restock_needs
+        assert need.item_name == "A4 paper"
+        assert need.shortfall_units == 700 - self.SHELF
+        assert need.line_ids == ["L1", "L2"]
+
+    async def test_a_line_that_shorts_only_because_a_sibling_took_the_stock_gets_a_need(
+        self, trail
+    ):
+        """Each 200 fits the shelf alone; together they do not. Measured per
+        line this raised nothing at all, and sales declined the second line
+        with nothing for replenishment to buy against it."""
+        response = await resolve(
+            lines_of(("printer paper", 200, "sheets"), ("copy paper", 200, "sheets")),
+            trail,
+        )
+        [need] = response.customer.restock_needs
+        assert need.shortfall_units == 400 - self.SHELF
+        assert need.line_ids == ["L1", "L2"]
+
+    async def test_every_line_sales_declines_for_stock_has_a_need_covering_it(self, trail):
+        """The intersection #15 sizes the restock by, asserted rather than
+        argued: sales' stock declines are a subset of what inventory measured."""
+        response = await resolve(
+            lines_of(("printer paper", 200, "sheets"), ("copy paper", 200, "sheets")),
+            trail,
+        )
+        quoted = [
+            price_line(
+                line_id=line.line_id,
+                quote_line_id=f"{STEP_ID}:{line.line_id}",
+                item_name=line.item_name,
+                units=line.quantity,
+                unit_price=price_of(line.item_name),
+            )
+            for line in response.customer.resolved_lines
+        ]
+        decisions = verify_lines(quoted, {"A4 paper": self.SHELF})
+
+        declined = {
+            decision.line.line_id
+            for decision in decisions
+            if decision.verdict is LineVerdict.DECLINED
+        }
+        covered = {
+            line_id
+            for need in response.customer.restock_needs
+            for line_id in need.line_ids
+        }
+        assert declined == {"L2"}, "the second line cannot draw what the first took"
+        assert declined <= covered
+
+    async def test_two_lines_on_different_items_keep_their_own_needs(self, trail):
+        response = await resolve(
+            lines_of(("printer paper", 10_000, "sheets"), ("glossy paper", 10_000, "sheets")),
+            trail,
+        )
+        assert [need.line_ids for need in response.customer.restock_needs] == [["L1"], ["L2"]]
+
+    async def test_a_single_line_request_is_unchanged(self, trail):
+        response = await resolve(lines_of(("printer paper", 10_000, "sheets")), trail)
+        [need] = response.customer.restock_needs
+        assert (need.line_ids, need.shortfall_units) == (["L1"], 10_000 - self.SHELF)
 
 
 class TestTheTrace:

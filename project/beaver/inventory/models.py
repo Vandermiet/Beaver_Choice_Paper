@@ -145,14 +145,27 @@ class ResolvedLine(BaseModel):
 
 
 class RestockNeed(BaseModel):
-    """A shortfall as it travels: the line, the item, and the units short.
+    """A shortfall as it travels: the lines, the item, and the units short.
 
     Customer-safe because it is a fact about the customer's own order rather
     than about our books — the orchestrator routes it to replenishment, which
     sizes its purchase from `shortfall_units` and never re-reads stock.
+
+    **One need per item, not per line.** Two lines of a request can resolve to
+    the same product — "printer paper" and "copy paper" are both `A4 paper` —
+    and sales draws both from one shelf, in order. A need per line would
+    measure each against the full reading and so subtract the stock once per
+    line, understating the true requirement by `(n-1) x stock_on_hand`; worse,
+    two lines that each fit the shelf alone but not together would raise no
+    need at all while sales declined the second. So the shortfall is
+    `sum(quantity) - stock_on_hand` over the lines naming one item, and
+    `line_ids` records every line it covers — mirroring `RestockPlan`, which
+    is already one purchase per item.
     """
 
-    line_id: str
+    #: Every line this shortfall covers, in the order they arrived. Usually
+    #: one.
+    line_ids: list[str]
     item_name: CarriedItemName
     shortfall_units: int
 

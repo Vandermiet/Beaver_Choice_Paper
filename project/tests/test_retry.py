@@ -122,21 +122,21 @@ class TestWhatThePurseOpensOn:
     """Sales' declines, intersected with inventory's measurement of them."""
 
     def test_a_stock_decline_that_inventory_measured_is_bought_for(self, seeded_db):
-        needs = [RestockNeed(line_id="L1", item_name=SHORT, shortfall_units=228)]
+        needs = [RestockNeed(line_ids=["L1"], item_name=SHORT, shortfall_units=228)]
         assert restocks_for(
             [a_blocker("L1", BlockerCode.INSUFFICIENT_STOCK)], needs
         ) == needs
 
     def test_a_line_declined_for_any_other_reason_buys_nothing(self, seeded_db):
         """The purse opens on a refusal for want of stock and on nothing else."""
-        needs = [RestockNeed(line_id="L1", item_name=SHORT, shortfall_units=228)]
+        needs = [RestockNeed(line_ids=["L1"], item_name=SHORT, shortfall_units=228)]
         assert restocks_for([a_blocker("L1", BlockerCode.UNPRICEABLE)], needs) == []
 
     def test_a_need_nobody_declined_buys_nothing(self, seeded_db):
         """Inventory's survey is advisory: a line it saw short but sales
         committed — a restock from an earlier request having landed — is not a
         reason to buy."""
-        needs = [RestockNeed(line_id="L1", item_name=SHORT, shortfall_units=228)]
+        needs = [RestockNeed(line_ids=["L1"], item_name=SHORT, shortfall_units=228)]
         assert restocks_for([], needs) == []
 
     def test_no_declines_at_all_open_nothing(self, seeded_db):
@@ -144,14 +144,24 @@ class TestWhatThePurseOpensOn:
 
     def test_the_needs_keep_inventorys_own_order(self, seeded_db):
         needs = [
-            RestockNeed(line_id="L1", item_name=SHORT, shortfall_units=1),
-            RestockNeed(line_id="L2", item_name=IN_STOCK, shortfall_units=2),
+            RestockNeed(line_ids=["L1"], item_name=SHORT, shortfall_units=1),
+            RestockNeed(line_ids=["L2"], item_name=IN_STOCK, shortfall_units=2),
         ]
         blockers = [
             a_blocker("L2", BlockerCode.INSUFFICIENT_STOCK),
             a_blocker("L1", BlockerCode.INSUFFICIENT_STOCK),
         ]
-        assert [need.line_id for need in restocks_for(blockers, needs)] == ["L1", "L2"]
+        assert [need.line_ids for need in restocks_for(blockers, needs)] == [["L1"], ["L2"]]
+
+
+    def test_a_need_covering_two_lines_is_narrowed_to_the_one_declined(self, seeded_db):
+        """The shortfall stands — it was measured over both lines, and the
+        committed one has taken its share off the shelf — but a line already
+        sold must not be offered to sales again."""
+        needs = [RestockNeed(line_ids=["L1", "L2"], item_name=SHORT, shortfall_units=128)]
+        [bought] = restocks_for([a_blocker("L2", BlockerCode.INSUFFICIENT_STOCK)], needs)
+        assert bought.line_ids == ["L2"]
+        assert bought.shortfall_units == 128
 
 
 class TestWhatPassTwoCarries:

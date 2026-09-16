@@ -173,6 +173,18 @@ def orchestrator_model(tool_name: str):
     return model
 
 
+def two_calls_in_one_turn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """Two delegations in a single response, which is what the live model did."""
+    if len(messages) == 1:
+        return ModelResponse(
+            parts=[
+                ToolCallPart("consult_inventory", {"line": "500 sheets of A4"}),
+                ToolCallPart("consult_inventory", {"line": "200 sheets of cardstock"}),
+            ]
+        )
+    return ModelResponse(parts=[TextPart("Thank you for your enquiry.")])
+
+
 async def run_toy(trail: AuditTrail, request_id: str = "1", tool_name: str = "consult_inventory"):
     """Run the toy orchestrator once, with both models scripted."""
     deps = AgentDeps(trail=trail, request_id=request_id)
@@ -398,3 +410,41 @@ class TestTheAllMessagesHypothesis:
         await run_toy(trail)
         restored = trail.read_transcript()[0]["messages"]
         assert [m.run_id for m in restored] == [sub_runs[-1].run_id] * len(restored)
+
+
+class TestTwoDelegationsInOneTurn:
+    """A model may put two tool calls in one response, and pydantic-ai runs them
+    concurrently. The trail has to survive that: measured on the ticket 109
+    evaluation run, where two of twenty requests crashed because both
+    delegations wrote their step id to the one `AgentDeps` they shared, and each
+    agent then echoed back the id its sibling had minted.
+    """
+
+    async def test_both_delegations_complete_and_keep_their_own_step_id(self, trail):
+        deps = AgentDeps(trail=trail, request_id="1")
+        with toy_agent.override(model=FunctionModel(toy_model)):
+            with orchestrator.override(model=FunctionModel(two_calls_in_one_turn)):
+                await orchestrator.run("500 sheets of A4 please", deps=deps)
+
+        delegations = [row for row in steps(trail) if row["kind"] == "delegation"]
+        assert len(delegations) == 2
+        assert [row["error"] for row in delegations] == [None, None]
+
+    async def test_each_delegations_tool_calls_hang_off_its_own_delegation(self, trail):
+        deps = AgentDeps(trail=trail, request_id="1")
+        with toy_agent.override(model=FunctionModel(toy_model)):
+            with orchestrator.override(model=FunctionModel(two_calls_in_one_turn)):
+                await orchestrator.run("500 sheets of A4 please", deps=deps)
+
+        rows = steps(trail)
+        delegations = {row["step_id"] for row in rows if row["kind"] == "delegation"}
+        tool_calls = [row for row in rows if row["kind"] == "tool_call"]
+        assert len(tool_calls) == 2
+        assert {row["parent_step_id"] for row in tool_calls} == delegations
+
+    async def test_the_orchestrator_is_the_parent_again_once_they_return(self, trail):
+        deps = AgentDeps(trail=trail, request_id="1")
+        with toy_agent.override(model=FunctionModel(toy_model)):
+            with orchestrator.override(model=FunctionModel(two_calls_in_one_turn)):
+                await orchestrator.run("500 sheets of A4 please", deps=deps)
+        assert deps.current_step_id is None

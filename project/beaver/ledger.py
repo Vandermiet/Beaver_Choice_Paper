@@ -105,13 +105,52 @@ async def write_row(
         The `transactions` rowid of the row just written.
     """
     return await asyncio.to_thread(
-        starter.create_transaction,
+        _write_and_read_back_the_rowid,
         item_name,
         transaction_type,
         units,
         total_price,
         booked_on.isoformat(),
     )
+
+
+def _write_and_read_back_the_rowid(
+    item_name: str,
+    transaction_type: str,
+    units: int,
+    total_price: float,
+    booked_on: str,
+) -> int:
+    """Write the row through the provided helper, and find its rowid ourselves.
+
+    The helper's own return value is not usable. It reads `last_insert_rowid()`
+    through `pd.read_sql`, which checks a *second* connection out of the pool —
+    and the pool hands connections back first-in first-out, so the reader is not
+    the connection `to_sql` inserted on. What comes back is that other
+    connection's last insert: one write behind, or nought on the first write of
+    the process. Both were measured on the ticket 109 evaluation run, where
+    `transaction_links` ended up pointing at seeded rows dated 2025-01-01 while
+    real sales carried no link at all.
+
+    The helpers are used as-is, so the workaround lives here, in the tool that
+    wraps one. `MAX(rowid)` is the row just written because `write_lock` is
+    held — the caller's documented precondition — and because nothing in this
+    system ever deletes a transaction, which is the only thing that could let
+    SQLite hand the same rowid out twice.
+
+    Args:
+        item_name: The exact carried-catalogue name.
+        transaction_type: `sales` or `stock_orders`.
+        units: The quantity moving.
+        total_price: The line total.
+        booked_on: The date the row is dated, ISO-formatted.
+
+    Returns:
+        The `transactions` rowid of the row just written.
+    """
+    starter.create_transaction(item_name, transaction_type, units, total_price, booked_on)
+    with starter.engine().connect() as conn:
+        return int(conn.execute(text("SELECT MAX(rowid) FROM transactions")).scalar_one())
 
 
 def link_to_request(

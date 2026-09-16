@@ -24,7 +24,7 @@ import functools
 import itertools
 import json
 from collections.abc import Awaitable, Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -575,6 +575,24 @@ class AgentDeps:
     earliest_availability: dict[str, date] = field(default_factory=dict)
 
 
+def _with_step_id(ctx: RunContext[AgentDeps], step_id: str) -> RunContext[AgentDeps]:
+    """The same run context, pointed at a deps that names this delegation.
+
+    A shallow copy of both, so the trail, the journal, the cash readings and
+    the availability dates stay the one set of objects the request shares —
+    only `current_step_id` differs, and it differs per delegation rather than
+    per request. That is what makes two delegations in one model turn safe.
+
+    Args:
+        ctx: The run context the tool was called with.
+        step_id: The delegation now in flight.
+
+    Returns:
+        A context whose `deps.current_step_id` is this delegation's.
+    """
+    return replace(ctx, deps=replace(ctx.deps, current_step_id=step_id))
+
+
 def delegation(agent: AgentName, name: str | None = None):
     """Make an orchestrator tool that delegates, logs itself, and cannot leak.
 
@@ -619,11 +637,18 @@ def delegation(agent: AgentName, name: str | None = None):
                 parent_step_id=parent_step_id,
                 inputs={"args": list(args), "kwargs": kwargs},
             ) as step:
-                deps.current_step_id = step.step_id
-                try:
-                    result = await fn(ctx, *args, **kwargs)
-                finally:
-                    deps.current_step_id = parent_step_id
+                # The delegate is handed its *own* deps, carrying its own step
+                # id, rather than the step id being written onto the deps every
+                # delegation shares. A model may put two tool calls in one
+                # response and pydantic-ai runs them concurrently, so a single
+                # mutable field is two delegations writing to one slot: the
+                # ticket 109 evaluation lost two of twenty requests that way,
+                # each agent echoing back the id its sibling had just minted.
+                # Everything a request accumulates — the trail, the journal,
+                # the cash readings — is shared by reference through the copy,
+                # so only the step id is per-delegation, which is the only
+                # thing that is.
+                result = await fn(_with_step_id(ctx, step.step_id), *args, **kwargs)
 
                 response = result.output
                 if response.step_id != step.step_id:

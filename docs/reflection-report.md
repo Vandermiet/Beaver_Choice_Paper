@@ -4,7 +4,7 @@ The Beaver's Choice / Munder Difflin multi-agent system: what it is, what it did
 when it was run over the twenty sample requests, and what should be built next.
 
 It is written to be read on its own. The architecture is explained here in
-prose; [`workflow-diagram.md`](workflow-diagram.md) draws the same system and is
+prose; [`workflow-diagram-detailed.md`](workflow-diagram-detailed.md) draws the same system and is
 a companion, not a prerequisite. Every measured figure in the evaluation section
 comes from the audit trail of one real run, and the SQL that produced each one
 is in the appendix, so no number here has to be taken on trust.

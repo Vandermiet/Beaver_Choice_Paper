@@ -1,6 +1,6 @@
 """The workflow diagram is a description, not an aspiration.
 
-The diagram in `docs/workflow-diagram.md` is graded on whether it matches the
+The diagram in `docs/workflow-diagram-detailed.md` is graded on whether it matches the
 system it draws, and a drawing has no compiler. These tests are that compiler:
 every tool the diagram names must be a real function in the agent's own module,
 every tool the models can actually call must be named in the diagram and drawn
@@ -25,7 +25,7 @@ from beaver.quoting.agent import quoting_agent
 from beaver.replenishment.agent import replenishment_agent
 from beaver.sales.agent import sales_agent
 
-DIAGRAM = Path(__file__).resolve().parents[2] / "docs" / "workflow-diagram.md"
+DIAGRAM = Path(__file__).resolve().parents[2] / "docs" / "workflow-diagram-detailed.md"
 
 
 class DrawnAgent(NamedTuple):

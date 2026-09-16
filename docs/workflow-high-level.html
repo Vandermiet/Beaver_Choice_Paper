@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Beaver's Choice At A Glance</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
+
+<style>
+  html { color-scheme: light dark; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<style>
+  :root {
+    --ground: #f2f3f0;
+    --surface: #fbfbf9;
+    --ink: #1c2024;
+    --ink-soft: #4e565e;
+    --ink-faint: #7b848d;
+    --rule: #d6d9d3;
+    --rule-strong: #b8bdb6;
+    --accent: #1f6a4d;
+    --accent-soft: #e2ece7;
+    --plate: #fbfaf7;
+    --plate-ink: #1a1d21;
+    --plate-rule: #cfd2cb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #15181a;
+      --surface: #1c2023;
+      --ink: #e8eae6;
+      --ink-soft: #a8b0b4;
+      --ink-faint: #7c858a;
+      --rule: #2e3438;
+      --rule-strong: #414a4f;
+      --accent: #6cc79c;
+      --accent-soft: #1d2f27;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #15181a;
+    --surface: #1c2023;
+    --ink: #e8eae6;
+    --ink-soft: #a8b0b4;
+    --ink-faint: #7c858a;
+    --rule: #2e3438;
+    --rule-strong: #414a4f;
+    --accent: #6cc79c;
+    --accent-soft: #1d2f27;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    padding-block: 3rem 5rem;
+    padding-inline: 20px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 2.5rem; }
+  .prose { max-width: 66ch; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-faint); margin: 0 0 0.75rem;
+  }
+  h1 {
+    font-family: "IBM Plex Serif", Georgia, serif;
+    font-size: clamp(2rem, 5vw, 2.8rem); font-weight: 600; line-height: 1.12;
+    margin: 0 0 1rem; text-wrap: balance; letter-spacing: -0.015em;
+  }
+  h2 {
+    font-family: "IBM Plex Serif", Georgia, serif;
+    font-size: 1.15rem; font-weight: 600; margin: 0 0 0.5rem;
+  }
+  p { margin: 0 0 0.9rem; color: var(--ink-soft); }
+  p:last-child { margin-bottom: 0; }
+  .lede { font-size: 1.08rem; }
+  strong { color: var(--ink); font-weight: 600; }
+  code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.88em; }
+  code { color: var(--ink); background: var(--accent-soft); padding: 0.1em 0.35em; border-radius: 3px; }
+  a { color: var(--accent); }
+
+  header { border-bottom: 1px solid var(--rule-strong); padding-bottom: 1.75rem; }
+
+  .plate {
+    background: var(--plate);
+    border: 1px solid var(--plate-rule);
+    border-radius: 2px;
+    overflow-x: auto;
+    padding: 1.75rem 1rem;
+  }
+  .plate pre.mermaid {
+    margin: 0; color: var(--plate-ink); display: flex; justify-content: center; min-width: min-content;
+  }
+
+  .owners { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 1.25rem 1.75rem; }
+  .owner { border-top: 2px solid var(--rule-strong); padding-top: 0.7rem; }
+  .owner.lead { border-top-color: var(--accent); }
+  .owner h2 {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.78rem; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.35rem;
+  }
+  .owner p { font-size: 0.93rem; margin: 0; }
+
+  footer { border-top: 1px solid var(--rule); padding-top: 1.25rem; font-size: 0.85rem; color: var(--ink-faint); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Beaver's Choice &middot; docs/workflow-high-level.md</p>
+    <h1>The workflow at a glance</h1>
+    <p class="lede prose">Five agents and the flows between them. No tools, no helpers, no tables &mdash; for those, the full drawing puts the tools back in.</p>
+  </header>
+
+  <section>
+    <div class="plate">
+<pre class="mermaid">
+%%{init: {"theme": "neutral", "flowchart": {"htmlLabels": true, "padding": 10}}}%%
+flowchart TB
+    CUSTOMER(["Customer — one prose enquiry + the date it arrived"])
+
+    ORCHESTRATOR["ORCHESTRATOR&lt;br/&gt;reads the enquiry, drives the sequence,&lt;br/&gt;writes the one reply"]
+
+    INVENTORY["INVENTORY&lt;br/&gt;do we carry this, and how short are we?"]
+    QUOTING["QUOTING&lt;br/&gt;what does each resolved line cost?"]
+    SALES["SALES&lt;br/&gt;can we fill this line right now?"]
+    REPLENISHMENT["REPLENISHMENT&lt;br/&gt;can we buy in what was refused,&lt;br/&gt;in time and within our means?"]
+
+    CUSTOMER --&gt; ORCHESTRATOR
+
+    ORCHESTRATOR --&gt;|"1 · resolve these requested lines"| INVENTORY
+    INVENTORY --&gt;|"resolved lines, shortfalls, revision questions"| ORCHESTRATOR
+
+    ORCHESTRATOR --&gt;|"2 · price the resolved lines"| QUOTING
+    QUOTING --&gt;|"priced lines, order total"| ORCHESTRATOR
+
+    ORCHESTRATOR --&gt;|"3 · commit, pass 1"| SALES
+    SALES --&gt;|"committed lines + declines"| ORCHESTRATOR
+
+    ORCHESTRATOR --&gt;|"4 · buy in the stock declines"| REPLENISHMENT
+    REPLENISHMENT --&gt;|"what is on its way, and from when"| ORCHESTRATOR
+
+    ORCHESTRATOR -.-&gt;|"5 · commit once more — only the lines we bought for"| SALES
+
+    ORCHESTRATOR ==&gt;|"one letter: prices, dates, and every refusal in the customer's own terms"| CUSTOMER
+</pre>
+    </div>
+  </section>
+
+  <section class="prose">
+    <p>One <strong>orchestrator</strong> owns the plan and every customer-facing word. It never touches a system of record itself. Around it sit <strong>four domain agents</strong>, each owning exactly one question and answering nothing else; none of them delegates, so every arrow starts or ends at the orchestrator.</p>
+    <p>The sequence is fixed &mdash; resolve, price, commit &mdash; with one bounded retry: if sales declines a line for want of stock, the orchestrator sends replenishment to buy it in and offers the line to sales once more. There is no third pass. Read the numbers as the order the orchestrator drives them in; steps 4 and 5 run only when pass 1 declined a line for stock the customer can still be sold, and the dashed arrow is the retry &mdash; the only arrow that can be skipped or taken twice.</p>
+  </section>
+
+  <section class="owners">
+    <div class="owner lead">
+      <h2>Orchestrator</h2>
+      <p>Reads the enquiry into catalogue-blind requested lines, routes them, merges both passes, and writes the single reply.</p>
+    </div>
+    <div class="owner">
+      <h2>Inventory</h2>
+      <p>Resolves a requested line to something we carry and measures the shortfall. A shortfall is a fact here, never a refusal.</p>
+    </div>
+    <div class="owner">
+      <h2>Quoting</h2>
+      <p>Prices every resolved line blind to stock, on its own discount ladder, with history as a non-binding comparison.</p>
+    </div>
+    <div class="owner">
+      <h2>Sales</h2>
+      <p>Re-reads the shelf at the moment of commitment and decides every line against that one reading before writing any of them.</p>
+    </div>
+    <div class="owner">
+      <h2>Replenishment</h2>
+      <p>Buys back what stock refused &mdash; the unmeetable deadline judged first, then the cash guard &mdash; booked so the second pass can see it.</p>
+    </div>
+  </section>
+
+  <footer>
+    Rendered from <span class="mono">docs/workflow-high-level.md</span>. The full drawing &mdash; every tool, every starter helper, the orchestration sequence &mdash; is <span class="mono">docs/workflow-diagram-detailed.md</span>.
+  </footer>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, securityLevel: "loose" });
+</script>
+</body>
+</html>

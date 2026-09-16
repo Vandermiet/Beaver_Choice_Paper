@@ -12,6 +12,10 @@ the models can call is missing, if a model-callable tool is drawn as though it
 were not, or if one of the seven required helpers is not visibly wrapped — so
 the drawing cannot quietly drift away from the system.
 
+For the shape alone — five agents and the flows between them —
+[`workflow-high-level.md`](workflow-high-level.md) draws the same system without
+the tools.
+
 ## The architecture
 
 Read it in three bands. The **orchestrator** owns the plan and every

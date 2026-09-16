@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Beaver's Choice Workflow</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
+
+<style>
+  html { color-scheme: light dark; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<style>
+  :root {
+    --ground: #f2f3f0;
+    --surface: #fbfbf9;
+    --ink: #1c2024;
+    --ink-soft: #4e565e;
+    --ink-faint: #7b848d;
+    --rule: #d6d9d3;
+    --rule-strong: #b8bdb6;
+    --accent: #1f6a4d;
+    --accent-soft: #e2ece7;
+    --flag: #9a3412;
+    --plate: #fbfaf7;
+    --plate-ink: #1a1d21;
+    --plate-rule: #cfd2cb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #15181a;
+      --surface: #1c2023;
+      --ink: #e8eae6;
+      --ink-soft: #a8b0b4;
+      --ink-faint: #7c858a;
+      --rule: #2e3438;
+      --rule-strong: #414a4f;
+      --accent: #6cc79c;
+      --accent-soft: #1d2f27;
+      --flag: #e0915f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #15181a;
+    --surface: #1c2023;
+    --ink: #e8eae6;
+    --ink-soft: #a8b0b4;
+    --ink-faint: #7c858a;
+    --rule: #2e3438;
+    --rule-strong: #414a4f;
+    --accent: #6cc79c;
+    --accent-soft: #1d2f27;
+    --flag: #e0915f;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    padding-block: 3rem 5rem;
+    padding-inline: 20px;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: 3.25rem; }
+  .prose { max-width: 66ch; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-faint); margin: 0 0 0.75rem;
+  }
+  h1 {
+    font-family: "IBM Plex Serif", Georgia, serif;
+    font-size: clamp(2rem, 5vw, 2.9rem); font-weight: 600; line-height: 1.12;
+    margin: 0 0 1rem; text-wrap: balance; letter-spacing: -0.015em;
+  }
+  h2 {
+    font-family: "IBM Plex Serif", Georgia, serif;
+    font-size: clamp(1.3rem, 3vw, 1.6rem); font-weight: 600;
+    margin: 0 0 0.6rem; text-wrap: balance;
+  }
+  h3 { font-size: 1rem; font-weight: 600; margin: 0 0 0.4rem; }
+  p { margin: 0 0 0.9rem; color: var(--ink-soft); }
+  p:last-child { margin-bottom: 0; }
+  .lede { font-size: 1.08rem; color: var(--ink-soft); }
+  code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.88em; }
+  code { color: var(--ink); background: var(--accent-soft); padding: 0.1em 0.35em; border-radius: 3px; }
+
+  header { border-bottom: 1px solid var(--rule-strong); padding-bottom: 2rem; }
+
+  section { display: flex; flex-direction: column; gap: 1.25rem; }
+  .section-head { display: flex; flex-direction: column; }
+
+  /* diagram plate — pinned light so the mermaid render reads on either host theme */
+  .plate {
+    background: var(--plate);
+    border: 1px solid var(--plate-rule);
+    border-radius: 2px;
+    overflow-x: auto;
+    padding: 1.5rem 1rem;
+  }
+  .plate pre.mermaid {
+    margin: 0; color: var(--plate-ink); display: flex; justify-content: center; min-width: min-content;
+  }
+
+  .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem 1.75rem; }
+  .legend-item { display: flex; gap: 0.75rem; align-items: flex-start; }
+  .swatch { flex: 0 0 34px; height: 22px; margin-top: 3px; border-radius: 3px; background: var(--surface); }
+  .swatch.solid { border: 1px solid var(--ink-soft); }
+  .swatch.dashed { border: 1px dashed var(--ink-soft); }
+  .swatch.thick { border: 3px solid var(--ink-soft); }
+  .legend-item p { margin: 0; font-size: 0.9rem; }
+  .legend-item strong { color: var(--ink); font-weight: 600; }
+
+  .table-scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 2px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; min-width: 640px; }
+  th, td { text-align: left; padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 500; background: var(--ground);
+  }
+  tr:last-child td { border-bottom: none; }
+  td code { background: none; padding: 0; color: var(--accent); }
+  td:last-child { color: var(--ink-soft); }
+
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; }
+  .note { border-left: 2px solid var(--rule-strong); padding-left: 1rem; }
+  .note.flag { border-left-color: var(--flag); }
+  .note h3 { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.85rem; color: var(--ink); }
+  .note p { font-size: 0.92rem; margin: 0; }
+
+  footer { border-top: 1px solid var(--rule); padding-top: 1.25rem; font-size: 0.85rem; color: var(--ink-faint); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Beaver's Choice &middot; project/beaver</p>
+    <h1>The workflow diagram</h1>
+    <p class="lede prose">Five agents, every tool each one owns, the starter helper each tool wraps, and the order the orchestrator drives them in. It describes the code in <code>project/beaver/</code>, not the design document that preceded it &mdash; where the two diverged, the drawing follows the code.</p>
+    <p class="prose" style="margin-bottom:0"><code>project/tests/test_diagram.py</code> parses the two blocks below and fails if a drawn tool does not exist, if a model-callable tool is missing or mis-drawn, or if one of the seven required helpers is not visibly wrapped. The drawing cannot quietly drift away from the system.</p>
+  </header>
+
+  <section>
+    <div class="section-head prose">
+      <p class="eyebrow">Figure 1</p>
+      <h2>The architecture</h2>
+      <p>Read it in three bands. The <strong>orchestrator</strong> owns the plan and every customer-facing word; the <strong>four domain agents</strong> each own one question and answer nothing else; the <strong>systems of record</strong> are written only through a provided helper, and read directly only where no helper exposes the column. A tool box reads: the function's name, what it is for, and the starter helper it wraps &mdash; or <code>no starter helper</code> where the rule is ours rather than the starter's.</p>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item">
+        <div class="swatch solid"></div>
+        <p><strong>Solid</strong> &mdash; a tool the agent's model may call.</p>
+      </div>
+      <div class="legend-item">
+        <div class="swatch dashed"></div>
+        <p><strong>Dashed</strong> &mdash; not offered to the model. Its arguments are money or exact names, and it is called by the agent's output function with what the arithmetic produced, so a row the books depend on can never go unwritten because a model forgot to ask for it.</p>
+      </div>
+      <div class="legend-item">
+        <div class="swatch thick"></div>
+        <p><strong>Thick</strong> &mdash; model-callable <em>and</em> called again by the output function. The model's call is what the audit trail records; the output function's call, taken in the same breath as the writes, is what the money moves on &mdash; the same function, so trail and business cannot drift apart.</p>
+      </div>
+    </div>
+
+    <div class="plate">
+<pre class="mermaid">
+%%{init: {"theme": "neutral", "flowchart": {"htmlLabels": true, "padding": 8}}}%%
+flowchart TB
+    CUSTOMER["Customer request&lt;br/&gt;one prose enquiry + the date it arrived"]
+    REPLY["One customer-facing reply&lt;br/&gt;outcome + letter + resume token"]
+
+    subgraph ORCHESTRATOR["ORCHESTRATOR — plans, routes, writes the letter. Never acts on a system of record."]
+        handle_request["handle_request — the request's whole life&lt;br/&gt;runs the agent, derives the outcome from the journal,&lt;br/&gt;persists a suspended flow, records the cash delta"]
+        orchestrator_agent["orchestrator_agent&lt;br/&gt;reads the enquiry into catalogue-blind requested lines,&lt;br/&gt;drives the sequence, writes every customer-facing word"]
+        consult_inventory["consult_inventory — delegation&lt;br/&gt;what do we sell of this, and how short are we?"]
+        consult_quoting["consult_quoting — delegation&lt;br/&gt;what does each resolved line cost?"]
+        place_order["place_order — delegation + bounded retry&lt;br/&gt;commit, buy in what is short, commit once more"]
+        commit_step["_commit — delegation to sales&lt;br/&gt;called by place_order, once per pass, never by the model"]
+        buy_step["_buy — delegation to replenishment&lt;br/&gt;called by place_order only when pass 1 declined on stock"]
+    end
+
+    subgraph SEAM["THE DELEGATION SEAM — @delegation, in beaver/audit.py"]
+        seam_view["AgentResponse in, AgentView out&lt;br/&gt;the internal half never enters the orchestrator's context:&lt;br/&gt;a leak is a type error, not a code-review miss"]
+        audited_toolset["AuditedToolset&lt;br/&gt;every domain tool call written to the trail as it returns,&lt;br/&gt;hanging off the delegation that caused it"]
+    end
+
+    subgraph KERNEL["THE SHARED KERNEL — beaver/contract.py, beaver/ledger.py"]
+        carried_catalogue["carried_catalogue&lt;br/&gt;the 18 names we sell, read once from the inventory table;&lt;br/&gt;backs the CarriedItemName validator every agent's models use,&lt;br/&gt;so a name that is not ours never reaches create_transaction"]
+        ledger_write["beaver.ledger&lt;br/&gt;the single door to create_transaction: one asyncio lock, because&lt;br/&gt;the helper reads last_insert_rowid on a pooled connection —&lt;br/&gt;and one transaction_links row per write, joining it to its request"]
+    end
+
+    subgraph INVENTORY["INVENTORY — does a requested line resolve to something we carry, and how short of it are we? Owns the five resolution blockers; never raises insufficient_stock."]
+        list_carried_catalogue["list_carried_catalogue&lt;br/&gt;what we sell at all, with category and stock&lt;br/&gt;wraps get_all_inventory"]
+        shortlist_candidates["shortlist_candidates&lt;br/&gt;the four resolution rules over the catalogue:&lt;br/&gt;finish/material selects, colour and quality drop,&lt;br/&gt;the size veto, the category guard&lt;br/&gt;no starter helper"]
+        check_stock["check_stock&lt;br/&gt;stock for a resolved item, to compute the shortfall&lt;br/&gt;wraps get_stock_level"]
+        resolve_requested_line["resolve_requested_line&lt;br/&gt;the verdict the envelope is built from, and the restock need&lt;br/&gt;a shortfall becomes: a fact, never a refusal&lt;br/&gt;no starter helper"]
+        read_stock["read_stock&lt;br/&gt;the authoritative count, never read back from the model&lt;br/&gt;wraps get_stock_level"]
+    end
+
+    subgraph QUOTING["QUOTING — what does a resolved line cost? Prices every resolved line blind to stock. Owns unpriceable."]
+        catalogue_price["catalogue_price&lt;br/&gt;unit price, static reference data&lt;br/&gt;reads the paper_supplies literal"]
+        find_precedent["find_precedent&lt;br/&gt;non-binding comparison, after the price is fixed;&lt;br/&gt;degrades one step and records a miss honestly&lt;br/&gt;wraps search_quote_history"]
+        price_line["price_line&lt;br/&gt;the discount ladder on units, per line, never compounding&lt;br/&gt;no starter helper"]
+        check_against_precedent["check_against_precedent&lt;br/&gt;notes where our price sits against what history charged;&lt;br/&gt;a note only — precedent has no argument that moves a price&lt;br/&gt;no starter helper"]
+        quote_total["quote_total&lt;br/&gt;what a set of lines comes to after each line's own discount&lt;br/&gt;no starter helper"]
+        record_quote["record_quote&lt;br/&gt;the quote registry: one row per priced line, written whether&lt;br/&gt;or not it becomes a sale&lt;br/&gt;no starter helper — direct SQL, our own table"]
+    end
+
+    subgraph SALES["SALES — can we fill this priced line right now, and what did it cost the business? Owns insufficient_stock, exclusively. Owns no deadline."]
+        snapshot_financials["snapshot_financials&lt;br/&gt;the commit-time stock re-check, one call for every item&lt;br/&gt;wraps generate_financial_report"]
+        verify_lines["verify_lines&lt;br/&gt;every line decided against one reading, before any line is&lt;br/&gt;written: nothing here can be rolled back&lt;br/&gt;no starter helper"]
+        record_sale["record_sale&lt;br/&gt;one transactions row per committed line, at the line total&lt;br/&gt;wraps create_transaction, through beaver.ledger"]
+        read_cash["read_cash&lt;br/&gt;the post-write read whose delta is the cash evidence&lt;br/&gt;wraps get_cash_balance"]
+        promised_date["promised_date&lt;br/&gt;from stock: the request date; restocked: the date&lt;br/&gt;replenishment was given by the supplier&lt;br/&gt;no starter helper"]
+    end
+
+    subgraph REPLENISHMENT["REPLENISHMENT — can we buy in what a customer was refused for want of stock, in time and within our means? Owns the unmeetable deadline and the cash guard."]
+        reorder_thresholds["reorder_thresholds&lt;br/&gt;the target stock level to rebuild to, and the shelf price;&lt;br/&gt;the only read of inventory.min_stock_level anywhere,&lt;br/&gt;because no required helper exposes it&lt;br/&gt;no starter helper — direct SQL"]
+        restock_arrival_date["restock_arrival_date&lt;br/&gt;when the goods reach us, sized by quantity&lt;br/&gt;wraps get_supplier_delivery_date"]
+        cash_available["cash_available&lt;br/&gt;the cash guard's read, before any money moves&lt;br/&gt;wraps get_cash_balance"]
+        plan_restocks["plan_restocks&lt;br/&gt;buy the shortfall and the floor back, measured after the sale,&lt;br/&gt;at supplier_cost_ratio — drawn per item from its own name,&lt;br/&gt;so two graders running this code report the same figures&lt;br/&gt;no starter helper"]
+        decide_restocks["decide_restocks&lt;br/&gt;the unmeetable deadline first, then the cash guard:&lt;br/&gt;per item, cheapest first, all-or-nothing within an item&lt;br/&gt;no starter helper"]
+        record_restock["record_restock&lt;br/&gt;money out, stock in, booked on the request date so pass 2&lt;br/&gt;can see it&lt;br/&gt;wraps create_transaction, through beaver.ledger"]
+    end
+
+    subgraph STARTER["THE PROVIDED HELPERS — project_starter.py, used as-is"]
+        get_all_inventory["get_all_inventory"]
+        get_stock_level["get_stock_level"]
+        search_quote_history["search_quote_history"]
+        paper_supplies["paper_supplies"]
+        generate_financial_report["generate_financial_report"]
+        create_transaction["create_transaction"]
+        get_cash_balance["get_cash_balance"]
+        get_supplier_delivery_date["get_supplier_delivery_date"]
+    end
+
+    subgraph RECORDS["SYSTEMS OF RECORD — munder_difflin.db"]
+        transactions["transactions&lt;br/&gt;money and stock movements — live stock is a sum over this&lt;br/&gt;table, never the inventory table's seeded column"]
+        inventory_table["inventory&lt;br/&gt;the carried catalogue and its reorder thresholds"]
+        quotes_table["quotes / quote_requests&lt;br/&gt;the seeded quote history"]
+    end
+
+    subgraph TRAIL["THE AUDIT TRAIL — an observation, deliberately not a system of record: nothing in the business reads it back, which is why the orchestrator may own it"]
+        audit_trail["agent_steps, blocker_signals, transaction_links,&lt;br/&gt;suspended_flows, quote_registry, quote_fulfilments&lt;br/&gt;+ a JSONL transcript sidecar, one line per delegation"]
+    end
+
+    CUSTOMER --&gt; handle_request
+    handle_request --&gt; orchestrator_agent
+    orchestrator_agent --&gt; consult_inventory
+    orchestrator_agent --&gt; consult_quoting
+    orchestrator_agent --&gt; place_order
+    place_order --&gt; commit_step
+    place_order --&gt; buy_step
+    orchestrator_agent --&gt; handle_request
+    handle_request --&gt; REPLY
+
+    consult_inventory --&gt; SEAM
+    consult_quoting --&gt; SEAM
+    commit_step --&gt; SEAM
+    buy_step --&gt; SEAM
+    seam_view --&gt; INVENTORY
+    seam_view --&gt; QUOTING
+    seam_view --&gt; SALES
+    seam_view --&gt; REPLENISHMENT
+    seam_view --&gt;|"full response, internal payload included"| audit_trail
+    seam_view --&gt;|"AgentView: customer payload + code-only blockers"| orchestrator_agent
+    audited_toolset --&gt; audit_trail
+    INVENTORY --&gt; audited_toolset
+    QUOTING --&gt; audited_toolset
+    SALES --&gt; audited_toolset
+    REPLENISHMENT --&gt; audited_toolset
+
+    list_carried_catalogue --&gt; get_all_inventory
+    check_stock --&gt; get_stock_level
+    read_stock --&gt; get_stock_level
+    catalogue_price --&gt; paper_supplies
+    find_precedent --&gt; search_quote_history
+    find_precedent --&gt; check_against_precedent
+    snapshot_financials --&gt; generate_financial_report
+    record_sale --&gt; ledger_write
+    read_cash --&gt; get_cash_balance
+    cash_available --&gt; get_cash_balance
+    restock_arrival_date --&gt; get_supplier_delivery_date
+    record_restock --&gt; ledger_write
+    ledger_write --&gt; create_transaction
+    ledger_write --&gt;|"transaction_links: every row traceable to its request"| audit_trail
+    record_quote --&gt; audit_trail
+    quote_total --&gt;|"the order total sales reports: sales prices nothing,&lt;br/&gt;so it does not compute one of its own"| SALES
+    reorder_thresholds --&gt; inventory_table
+    carried_catalogue --&gt; inventory_table
+
+    get_all_inventory --&gt; transactions
+    get_stock_level --&gt; transactions
+    generate_financial_report --&gt; transactions
+    get_cash_balance --&gt; transactions
+    create_transaction --&gt; transactions
+    search_quote_history --&gt; quotes_table
+
+    classDef unexposed stroke-dasharray: 5 5
+    classDef twice stroke-width: 4px
+    class resolve_requested_line,read_stock,price_line,check_against_precedent,quote_total,record_quote,verify_lines,record_sale,read_cash,promised_date,plan_restocks,decide_restocks,record_restock,carried_catalogue,ledger_write unexposed
+    class snapshot_financials,cash_available,reorder_thresholds twice
+</pre>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head prose">
+      <p class="eyebrow">Figure 2</p>
+      <h2>The orchestration sequence</h2>
+      <p>Single-level throughout: a domain agent never delegates. Exactly one bounded retry, and the purse opens on sales' declines rather than on inventory's survey.</p>
+    </div>
+
+    <div class="plate">
+<pre class="mermaid">
+%%{init: {"theme": "neutral"}}%%
+sequenceDiagram
+    autonumber
+    actor customer as Customer
+    participant orchestrator
+    participant seam as delegation seam
+    participant inventory
+    participant quoting
+    participant sales
+    participant replenishment
+    participant trail as audit trail
+
+    customer-&gt;&gt;orchestrator: one prose enquiry + the request date
+    Note over orchestrator: reads it into catalogue-blind requested lines&lt;br/&gt;keeping the customer's own words, quantity and unit
+
+    orchestrator-&gt;&gt;seam: consult_inventory(lines, as_of_date)
+    seam-&gt;&gt;inventory: run
+    inventory--&gt;&gt;seam: AgentResponse: resolved lines, restock needs, internal stock facts
+    seam-&gt;&gt;trail: the full response, internal payload included
+    seam--&gt;&gt;orchestrator: AgentView: resolved lines, restock needs, code-only blockers
+
+    alt nothing resolved
+        orchestrator--&gt;&gt;customer: one letter asking every revision question at once&lt;br/&gt;PENDING_CUSTOMER_REVISION, suspended flow persisted
+    else at least one line resolved
+        orchestrator-&gt;&gt;seam: consult_quoting(resolved lines, as_of_date)
+        seam-&gt;&gt;quoting: run
+        quoting--&gt;&gt;seam: AgentResponse: priced lines, precedent comparisons
+        seam-&gt;&gt;trail: full response + one quote_registry row per priced line
+        seam--&gt;&gt;orchestrator: AgentView: priced lines and the quote total
+
+        orchestrator-&gt;&gt;seam: place_order → _commit, pass 1
+        seam-&gt;&gt;sales: run
+        Note over sales: re-reads the shelf at the moment of commitment,&lt;br/&gt;decides every line, then writes: one transactions row&lt;br/&gt;per committed line, at the line total
+        sales--&gt;&gt;seam: AgentResponse: committed + declined, cash before and after
+        seam-&gt;&gt;trail: full response, blocker signals, transaction links
+        seam--&gt;&gt;orchestrator: AgentView: committed lines with dates, declined lines
+
+        opt pass-1 insufficient_stock declines ∩ inventory's restock needs
+            orchestrator-&gt;&gt;seam: place_order → _buy
+            seam-&gt;&gt;replenishment: run
+            Note over replenishment: buys the shortfall and the floor back, measured after the sale —&lt;br/&gt;the unmeetable deadline is judged first, then the cash guard —&lt;br/&gt;and books it on the request date so pass 2 can see it
+            replenishment--&gt;&gt;seam: AgentResponse: restocked items + availability dates
+            seam-&gt;&gt;trail: full response, refusals as blocker signals
+            seam--&gt;&gt;orchestrator: AgentView: what is now on its way, and from when
+
+            opt anything was actually bought
+                orchestrator-&gt;&gt;seam: place_order → _commit, pass 2 — only the lines we bought for
+                Note over orchestrator: not simply "the declined lines": a need refused as late or&lt;br/&gt;unaffordable has no new stock behind it, and offering it again&lt;br/&gt;would replace its true refusal with a second stock refusal
+                seam-&gt;&gt;sales: run
+                Note over sales: stateless, never learns a retry happened —&lt;br/&gt;it can only sell what it is offered, and it is never&lt;br/&gt;offered a line that has already sold
+                sales--&gt;&gt;seam: AgentResponse: committed + declined
+                seam-&gt;&gt;trail: full response, blocker signals, transaction links
+                seam--&gt;&gt;orchestrator: AgentView: the second pass's result
+            end
+        end
+
+        Note over orchestrator: merges both passes — committed, declined, order total,&lt;br/&gt;max promised date — and speaks the last blocker per line.&lt;br/&gt;No third pass exists: _commit is unreachable from here again.
+        orchestrator--&gt;&gt;customer: one letter: the lines placed with prices and dates,&lt;br/&gt;every refusal in the customer's own terms, every question in one place
+    end
+</pre>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head prose">
+      <p class="eyebrow">Coverage</p>
+      <h2>The seven required helpers, and where each is used</h2>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Helper</th><th>Tool that wraps it</th><th>Agent</th><th>The question it answers</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>get_all_inventory</code></td><td><code>list_carried_catalogue</code></td><td>inventory</td><td>what do we sell at all?</td></tr>
+          <tr><td><code>get_stock_level</code></td><td><code>check_stock</code>, <code>read_stock</code></td><td>inventory</td><td>how many of this do we hold, and how short are we?</td></tr>
+          <tr><td><code>search_quote_history</code></td><td><code>find_precedent</code></td><td>quoting</td><td>what have we charged for something like this before?</td></tr>
+          <tr><td><code>generate_financial_report</code></td><td><code>snapshot_financials</code></td><td>sales</td><td>what do we hold of everything, right now, at commit time?</td></tr>
+          <tr><td><code>create_transaction</code></td><td><code>record_sale</code>, <code>record_restock</code></td><td>sales, replenishment</td><td>write the money: a sale out, a purchase in</td></tr>
+          <tr><td><code>get_cash_balance</code></td><td><code>read_cash</code>, <code>cash_available</code></td><td>sales, replenishment</td><td>what did this request earn us / what can we afford?</td></tr>
+          <tr><td><code>get_supplier_delivery_date</code></td><td><code>restock_arrival_date</code></td><td>replenishment</td><td>when would the goods reach us?</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p><code>paper_supplies</code> is the eighth thing the starter provides and the only one that is not a function: <code>catalogue_price</code> reads the list literal directly, because a unit price is static reference data and a round-trip would imply it could vary between calls. <code>init_database</code> is called by the harness, with the engine argument the starter's own call omits.</p>
+      <p>Three reads go straight to SQL because no helper exposes what they need: <code>reorder_thresholds</code> reads <code>inventory.min_stock_level</code>, <code>carried_catalogue</code> reads the 18 names the validator enforces, and <code>record_quote</code> writes a table of our own. Every <strong>write to a system of record</strong> goes through <code>create_transaction</code> &mdash; there is no second way to move money or stock.</p>
+      <p><strong>Two agents wrapping <code>create_transaction</code> and two wrapping <code>get_cash_balance</code> is not a responsibility overlap.</strong> Ownership is judged on the question answered, never on the data touched. Sales asks <em>what did this sale bring in</em>, after the write; replenishment asks <em>what can we spend</em>, before it, net of revenue this same request has already booked. Different questions about the same column, and neither agent makes the other's decision.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head prose">
+      <p class="eyebrow">Divergences</p>
+      <h2>Where the diagram departs from the design document</h2>
+      <p>The design's tool table listed thirteen tools, all of them assumed to be model-callable. Building it moved four of them.</p>
+    </div>
+    <div class="notes">
+      <div class="note flag">
+        <h3>record_quote, record_sale, record_restock</h3>
+        <p>Not offered to the model. Their arguments are money, and a registry row that depends on a model remembering to write it &mdash; or on the figures it reports back &mdash; is a row the books cannot rely on. Each agent's output function calls them with what the arithmetic produced.</p>
+      </div>
+      <div class="note flag">
+        <h3>cash_after_sale &rarr; read_cash</h3>
+        <p>Renamed, and likewise called by sales' output function rather than by the model, in the same breath as the writes it measures.</p>
+      </div>
+      <div class="note flag">
+        <h3>(min-stock read) &rarr; reorder_thresholds</h3>
+        <p>A model-callable tool. It reads <code>min_stock_level</code> and <code>unit_price</code> and deliberately never <code>current_stock</code>: <code>init_database</code> writes the <code>inventory</code> table once and nothing updates it at runtime, so that column still reads its seeded figure after we have sold the shelf bare. Live stock exists only as a sum over <code>transactions</code>.</p>
+      </div>
+      <div class="note">
+        <h3>The deterministic functions</h3>
+        <p><code>resolve_requested_line</code>, <code>price_line</code>, <code>verify_lines</code>, <code>promised_date</code>, <code>plan_restocks</code>, <code>decide_restocks</code> are drawn because they are where the business rules actually live. A diagram that showed only what a model may call would show the judgement and hide the arithmetic.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Rendered from <span class="mono">docs/workflow-diagram-detailed.md</span>. The two diagrams are the same source <span class="mono">project/tests/test_diagram.py</span> parses.
+  </footer>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, securityLevel: "loose" });
+</script>
+</body>
+</html>

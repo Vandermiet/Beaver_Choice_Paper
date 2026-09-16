@@ -185,12 +185,32 @@ def two_calls_in_one_turn(messages: list[ModelMessage], info: AgentInfo) -> Mode
     return ModelResponse(parts=[TextPart("Thank you for your enquiry.")])
 
 
-async def run_toy(trail: AuditTrail, request_id: str = "1", tool_name: str = "consult_inventory"):
-    """Run the toy orchestrator once, with both models scripted."""
-    deps = AgentDeps(trail=trail, request_id=request_id)
+async def run_toy(
+    trail: AuditTrail,
+    request_id: str = "1",
+    tool_name: str = "consult_inventory",
+    model=None,
+    deps: AgentDeps | None = None,
+):
+    """Run the toy orchestrator once, with both models scripted.
+
+    Args:
+        trail: The trail to write to.
+        request_id: The request being handled.
+        tool_name: Which delegation the orchestrator calls, when its turn is
+            the default one.
+        model: The orchestrator's scripted turn, for a test that needs one the
+            default cannot express — two tool calls in a single response, say.
+        deps: The deps to run with, for a test that asserts on them afterwards.
+
+    Returns:
+        The orchestrator's run result.
+    """
+    deps = deps or AgentDeps(trail=trail, request_id=request_id)
+    orchestrator_turn = model or orchestrator_model(tool_name)
     with toy_agent.override(model=FunctionModel(toy_model)):
         with forgetful_agent.override(model=FunctionModel(toy_model)):
-            with orchestrator.override(model=FunctionModel(orchestrator_model(tool_name))):
+            with orchestrator.override(model=FunctionModel(orchestrator_turn)):
                 return await orchestrator.run("500 sheets of A4 please", deps=deps)
 
 
@@ -421,30 +441,23 @@ class TestTwoDelegationsInOneTurn:
     """
 
     async def test_both_delegations_complete_and_keep_their_own_step_id(self, trail):
-        deps = AgentDeps(trail=trail, request_id="1")
-        with toy_agent.override(model=FunctionModel(toy_model)):
-            with orchestrator.override(model=FunctionModel(two_calls_in_one_turn)):
-                await orchestrator.run("500 sheets of A4 please", deps=deps)
-
+        await run_toy(trail, model=two_calls_in_one_turn)
         delegations = [row for row in steps(trail) if row["kind"] == "delegation"]
         assert len(delegations) == 2
         assert [row["error"] for row in delegations] == [None, None]
+        assert len({row["step_id"] for row in delegations}) == 2
 
     async def test_each_delegations_tool_calls_hang_off_its_own_delegation(self, trail):
-        deps = AgentDeps(trail=trail, request_id="1")
-        with toy_agent.override(model=FunctionModel(toy_model)):
-            with orchestrator.override(model=FunctionModel(two_calls_in_one_turn)):
-                await orchestrator.run("500 sheets of A4 please", deps=deps)
-
+        await run_toy(trail, model=two_calls_in_one_turn)
         rows = steps(trail)
         delegations = {row["step_id"] for row in rows if row["kind"] == "delegation"}
         tool_calls = [row for row in rows if row["kind"] == "tool_call"]
         assert len(tool_calls) == 2
         assert {row["parent_step_id"] for row in tool_calls} == delegations
 
-    async def test_the_orchestrator_is_the_parent_again_once_they_return(self, trail):
-        deps = AgentDeps(trail=trail, request_id="1")
-        with toy_agent.override(model=FunctionModel(toy_model)):
-            with orchestrator.override(model=FunctionModel(two_calls_in_one_turn)):
-                await orchestrator.run("500 sheets of A4 please", deps=deps)
-        assert deps.current_step_id is None
+    async def test_neither_delegation_is_recorded_beneath_the_other(self, trail):
+        """Both hang off the orchestrator, which has no step of its own — two
+        tool calls of one turn are siblings, whatever order they finish in."""
+        await run_toy(trail, model=two_calls_in_one_turn)
+        delegations = [row for row in steps(trail) if row["kind"] == "delegation"]
+        assert [row["parent_step_id"] for row in delegations] == [None, None]

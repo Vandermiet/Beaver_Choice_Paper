@@ -539,9 +539,13 @@ class AgentDeps:
 
     It lives here rather than in `contract` because both of its moving parts
     exist for the trail: the trail itself, and the delegation step that tool
-    calls should hang off. The same object is handed to a delegate — that is
-    what makes `current_step_id` reach the sub-agent's tools without any agent
-    having to pass it along.
+    calls should hang off. A delegate is handed a *copy* carrying its own
+    `current_step_id` — see `_with_step_id` — which is what makes the step id
+    reach the sub-agent's tools without any agent having to pass it along, and
+    without two concurrent delegations having to share one slot to put it in.
+    Everything else here is shared by reference across that copy, because
+    everything else is a fact about the request rather than about one step of
+    it.
 
     The journal rides here too, and it is deliberately *not* part of the trail:
     the trail records what the agents did, internal halves included, while the
@@ -553,8 +557,10 @@ class AgentDeps:
 
     trail: AuditTrail
     request_id: str
-    #: The delegation currently in flight. `None` at the orchestrator's own
-    #: level, where there is no delegation to hang anything off.
+    #: The delegation this copy of the deps belongs to. `None` at the
+    #: orchestrator's own level, where there is no delegation to hang anything
+    #: off, and never written on an instance after it is built: the seam mints
+    #: a copy per delegation rather than assigning to one shared field.
     current_step_id: str | None = None
     #: What the orchestrator has been handed about this request's lines, and
     #: what its outcome is derived from. Filled by the seam below, so a new
@@ -582,6 +588,13 @@ def _with_step_id(ctx: RunContext[AgentDeps], step_id: str) -> RunContext[AgentD
     the availability dates stay the one set of objects the request shares —
     only `current_step_id` differs, and it differs per delegation rather than
     per request. That is what makes two delegations in one model turn safe.
+
+    `RunContext` is pydantic-ai's dataclass rather than ours, and copying it
+    is sound only while every field of it takes an initialiser: `replace`
+    rebuilds the instance through `__init__`, so a field that ever became
+    `init=False` upstream would raise here rather than quietly drop. Checked
+    against 2.43.0, where none is, and it fails loudly at the seam if that
+    changes — which is the failure mode to want.
 
     Args:
         ctx: The run context the tool was called with.
@@ -637,17 +650,12 @@ def delegation(agent: AgentName, name: str | None = None):
                 parent_step_id=parent_step_id,
                 inputs={"args": list(args), "kwargs": kwargs},
             ) as step:
-                # The delegate is handed its *own* deps, carrying its own step
-                # id, rather than the step id being written onto the deps every
-                # delegation shares. A model may put two tool calls in one
-                # response and pydantic-ai runs them concurrently, so a single
-                # mutable field is two delegations writing to one slot: the
-                # ticket 109 evaluation lost two of twenty requests that way,
-                # each agent echoing back the id its sibling had just minted.
-                # Everything a request accumulates — the trail, the journal,
-                # the cash readings — is shared by reference through the copy,
-                # so only the step id is per-delegation, which is the only
-                # thing that is.
+                # Its own deps, carrying its own step id, rather than the id
+                # written onto the deps every delegation shares. A model may
+                # put two tool calls in one response and pydantic-ai runs them
+                # concurrently, so one mutable field is two delegations writing
+                # to one slot — issue #38, which cost the ticket 109 evaluation
+                # two of its twenty requests.
                 result = await fn(_with_step_id(ctx, step.step_id), *args, **kwargs)
 
                 response = result.output

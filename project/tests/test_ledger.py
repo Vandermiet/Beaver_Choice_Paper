@@ -1,14 +1,10 @@
 """The ledger: the rowid a write reports is the row it actually wrote.
 
-The provided `create_transaction` returns `last_insert_rowid()` read through
-`pd.read_sql` — a *second* connection out of the pool, whose last insert was
-some other writer's. The number it hands back is therefore not reliably the row
-it just wrote, and `transaction_links` and `quote_fulfilments` are both keyed on
-it: the ticket 109 evaluation run found links pointing at seeded rows dated
-2025-01-01 and real sales with no link at all.
-
-The helper is used as-is, per `beaver.starter` — so the workaround lives here,
-in the tool that wraps it.
+Which the provided `create_transaction` cannot promise, because it reads
+`last_insert_rowid()` on a second pooled connection. Issue #39 has the
+measurements and `ledger._write_and_read_back_the_rowid` has the workaround;
+what is asserted here is only the guarantee the rest of the system is entitled
+to, since `transaction_links` and `quote_fulfilments` are both keyed on it.
 """
 
 from datetime import date
@@ -27,10 +23,9 @@ def pooled(seeded_db):
 
     Which is every real run of this system: the audit trail writes its own rows
     through the same engine, so a second connection exists by the time the
-    first sale is written. SQLAlchemy's queue pool hands them out first-in
-    first-out, so the connection `pd.read_sql` gets for `last_insert_rowid()`
-    is *not* the one `to_sql` inserted on — and the number comes back one write
-    behind, or zero on the first write of all.
+    first sale is written. A single-connection pool hides the defect entirely,
+    which is why the suite never saw it — so the fixture creates the condition
+    rather than waiting to be unlucky.
     """
     first, second = seeded_db.connect(), seeded_db.connect()
     first.close()
@@ -56,6 +51,9 @@ def last_rowid() -> int:
 
 
 class TestTheRowidIsTheRowThatWasWritten:
+    """Three ways of asking one question, because one link keyed on the wrong
+    row is money attributed to a customer who never bought it."""
+
     async def test_the_reported_rowid_holds_the_row_just_written(self, pooled):
         async with ledger.write_lock:
             rowid = await ledger.write_row("A4 paper", "sales", 250, 12.5, BOOKED_ON)

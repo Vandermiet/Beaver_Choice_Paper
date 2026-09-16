@@ -4,9 +4,11 @@ The agent reads the priced lines and drives the tool; the envelope is built
 from what the tools say, not from what the model reports back about them. Here
 that matters more than anywhere else in the system, because this is the only
 agent that cannot be undone: the stock reading every line is judged against is
-taken by the output function itself, in the same breath as the writes, and the
-model's own call to `snapshot_financials` is what the trail records rather than
-what the order is decided on.
+taken by the output function itself, in the same breath as the writes. The
+model calls `snapshot_financials` too, one turn earlier, and that call is what
+the trail records; both go through the same function, so the reading the audit
+shows and the reading the money moved on can differ only by what genuinely
+happened to the shelf in between.
 
 So a model that misreads the shelf cannot oversell it, and a model that invents
 a line cannot bill for it — an invented name fails `CarriedItemName` and an
@@ -29,6 +31,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from beaver.audit import AgentDeps, AuditedToolset
 from beaver.contract import AgentName, BlockerCode, BlockerSignal
 from beaver.quoting.models import QuotedLine
+from beaver.quoting.tools import quote_total
 from beaver.sales.models import (
     CommittedLine,
     DeclinedLine,
@@ -38,10 +41,8 @@ from beaver.sales.models import (
     SalesResponse,
 )
 from beaver.sales.tools import (
-    order_total,
     promised_date,
     read_cash,
-    read_financials,
     record_sale,
     snapshot_financials,
     verify_lines,
@@ -97,10 +98,11 @@ async def build_sales_response(
     availability = earliest_availability or {}
     as_of = as_of_date.isoformat()
 
-    # The authoritative read: taken here rather than trusted from the model's
-    # own call, and taken now rather than trusted from inventory's survey,
-    # which ran before quoting and before any restock landed.
-    snapshot = read_financials([line.item_name for line in ordered], as_of)
+    # The authoritative read: the same tool the model called, called again
+    # here, because the reading that decides an order is the one taken in the
+    # same breath as the writes — not the one taken a model turn earlier, and
+    # certainly not inventory's survey, which ran before quoting.
+    snapshot = snapshot_financials([line.item_name for line in ordered], as_of)
 
     # Every line is decided before any line is written. Nothing in this
     # database can be rolled back, so an order that half-commits has no repair.
@@ -118,8 +120,15 @@ async def build_sales_response(
     )
     cash_after = read_cash(as_of)
 
-    # Built from the write result rather than from the verdicts, so a line can
-    # appear here only if money actually moved for it.
+    # The commitment invariant, in one place: a line is sold iff the write
+    # result gave it a rowid. Everything the customer is told about this order
+    # — the lines, the total, the date — is derived from this list alone, so
+    # there is no second definition of "committed" to disagree with it.
+    sold = [line for line in committed_lines if line.line_id in rowid_by_line]
+    refused = [
+        decision for decision in decisions if decision.verdict is LineVerdict.DECLINED
+    ]
+
     committed = [
         CommittedLine(
             line_id=line.line_id,
@@ -128,8 +137,7 @@ async def build_sales_response(
             line_total=line.line_total,
             promised_delivery_date=promised_date(line.item_name, as_of_date, availability),
         )
-        for line in committed_lines
-        if line.line_id in rowid_by_line
+        for line in sold
     ]
     declined = [
         DeclinedLine(
@@ -137,8 +145,7 @@ async def build_sales_response(
             item_name=decision.line.item_name,
             units=decision.line.units,
         )
-        for decision in decisions
-        if decision.verdict is LineVerdict.DECLINED
+        for decision in refused
     ]
     signals = [
         BlockerSignal(
@@ -146,8 +153,7 @@ async def build_sales_response(
             code=BlockerCode.INSUFFICIENT_STOCK,
             detail=decision.detail,
         )
-        for decision in decisions
-        if decision.verdict is LineVerdict.DECLINED
+        for decision in refused
     ]
 
     return SalesResponse(
@@ -157,7 +163,9 @@ async def build_sales_response(
         customer=SalesCustomerPayload(
             committed=committed,
             declined=declined,
-            order_total=order_total([line for line in committed_lines if line.line_id in rowid_by_line]),
+            # Quoting's own arithmetic over the lines that committed: sales
+            # prices nothing, so the order's total is its quote's total.
+            order_total=quote_total(sold),
             # An order is delivered when its last item arrives.
             promised_delivery_date=max(
                 (line.promised_delivery_date for line in committed), default=None

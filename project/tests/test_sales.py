@@ -11,6 +11,7 @@ orchestrator makes. Both run on a `FunctionModel`, so no network and no key.
 """
 
 import asyncio
+import contextlib
 import json
 
 import pytest
@@ -25,12 +26,11 @@ from beaver.contract import AgentName, BlockerCode
 from beaver.inventory.agent import inventory_agent
 from beaver.orchestrator import orchestrator_agent
 from beaver.quoting.agent import quoting_agent
-from beaver.quoting.tools import price_line, price_of
+from beaver.quoting.tools import price_line, price_of, quote_total
 from beaver.sales import tools
 from beaver.sales.agent import sales_agent
 from beaver.sales.models import LineVerdict
 from beaver.sales.tools import (
-    order_total,
     promised_date,
     read_cash,
     record_sale,
@@ -184,11 +184,14 @@ def _date(iso: str):
 
 
 class TestTheOrderTotal:
+    """Quoting's arithmetic over the lines that committed. Sales prices
+    nothing, so the order's total has no second definition here."""
+
     def test_it_is_the_sum_of_the_committed_line_totals(self, seeded_db):
-        assert order_total([a_line(500), a_line(300, line_id="L2")]) == 38.75
+        assert quote_total([a_line(500), a_line(300, line_id="L2")]) == 38.75
 
     def test_nothing_committed_comes_to_nothing(self, seeded_db):
-        assert order_total([]) == 0.0
+        assert quote_total([]) == 0.0
 
 
 def scripted_sales(lines, as_of_date: str = REQUEST_DATE, availability=None):
@@ -472,6 +475,72 @@ class TestTheWriteLock:
         by_rowid = {row["rowid"]: row["item_name"] for row in sales_rows()}
         assert by_rowid[first["L1"]] == IN_STOCK
         assert by_rowid[second["L2"]] == "Glossy paper"
+
+    async def test_the_same_two_writers_do_overlap_with_the_lock_taken_away(
+        self, trail, monkeypatch
+    ):
+        """The other half of the claim: the hazard is real, and the lock is
+        what removes it. Without this, the test above asserts only that two
+        calls happened to run in order."""
+        import time
+
+        real = starter.create_transaction
+        inside: list[str] = []
+        overlapped: list[str] = []
+
+        def slow(item_name, transaction_type, quantity, price, date_):
+            if inside:
+                overlapped.append(item_name)
+            inside.append(item_name)
+            time.sleep(0.05)
+            rowid = real(item_name, transaction_type, quantity, price, date_)
+            time.sleep(0.05)
+            inside.pop()
+            return rowid
+
+        monkeypatch.setattr(starter, "create_transaction", slow)
+        monkeypatch.setattr(tools, "_write_lock", contextlib.nullcontext())
+
+        async def commit(item_name: str, line_id: str):
+            return await record_sale(
+                [a_line(100, item_name, line_id)],
+                run_id=trail.run_id,
+                request_id="1",
+                step_id=STEP_ID,
+                sold_on=_date(REQUEST_DATE),
+            )
+
+        await asyncio.gather(commit(IN_STOCK, "L1"), commit("Glossy paper", "L2"))
+        assert overlapped != []
+
+    async def test_a_row_is_traceable_before_the_next_one_is_written(
+        self, trail, monkeypatch
+    ):
+        """A write that fails part-way leaves no untraceable money: each row is
+        linked to its request in the same breath as it is written."""
+        real = starter.create_transaction
+
+        def fail_on_the_second(item_name, transaction_type, quantity, price, date_):
+            if sales_rows():
+                raise RuntimeError("the connection dropped")
+            return real(item_name, transaction_type, quantity, price, date_)
+
+        monkeypatch.setattr(starter, "create_transaction", fail_on_the_second)
+
+        with pytest.raises(RuntimeError):
+            await record_sale(
+                [a_line(100, IN_STOCK, "L1"), a_line(100, "Glossy paper", "L2")],
+                run_id=trail.run_id,
+                request_id="1",
+                step_id=STEP_ID,
+                sold_on=_date(REQUEST_DATE),
+            )
+
+        assert len(sales_rows()) == 1
+        assert [link["transaction_rowid"] for link in links()] == [
+            sales_rows()[0]["rowid"]
+        ]
+        assert len(fulfilments()) == 1
 
 
 #: What a customer says for the items these tests order. Inventory has to

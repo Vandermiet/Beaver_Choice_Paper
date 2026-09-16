@@ -88,13 +88,15 @@ working, do not list the request back with its line numbers, do not write
 headings like "Requested Lines" or "Reply", and do not sign it with a
 placeholder name: sign off as Beaver's Choice Paper Company.
 
-Confirm the lines we can supply by the name we sell them as and the quantity
-they asked for. Address every line we could not, in the customer's own terms,
-and put all of your questions together in one place so one round of
-correspondence clears them.
+Confirm the lines sales committed by the name we sell them as and the quantity
+they asked for — those are orders placed, not offers. Address every line we
+could not supply, in the customer's own terms, and put all of your questions
+together in one place so one round of correspondence clears them.
 
-State the price of every line quoting priced, in its own words: how many
-units, at what price each, and what that comes to. Where a line earned a
+State the price of every line sales committed, in its own words: how many
+units, at what price each, and what that comes to. Do not price a line we
+could not supply: a price with no order behind it reads as a sale we did not
+make. Where a line earned a
 discount, say the rate and say what earned it — the size of that line's own
 order — and give the total after it. Where a line earned none, say nothing
 about discounts at all: a discount sentence on every line makes the real ones

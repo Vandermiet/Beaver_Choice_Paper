@@ -588,27 +588,41 @@ def search_quote_history(search_terms: List[str], limit: int = 5) -> List[Dict]:
 ########################
 ########################
 
+# Environment and model: beaver/llm.py loads the .env credential and builds the
+# one shared gpt-4o-mini model behind the Vocareum proxy. The helpers above are
+# re-exported by beaver/starter.py, which every tool module imports rather than
+# reaching into __main__.
 
-# Set up and load your env parameters and instantiate your model.
+# Tools live beside the agent that uses them, one tools.py per agent. Each wraps
+# the helpers above and adds the criteria the flow needs; the wrappers a model
+# may call directly are registered as a FunctionToolset in that agent.py.
 
+# Tools for inventory agent -- beaver/inventory/tools.py
+#   list_carried_catalogue and check_stock/read_stock wrap get_all_inventory and
+#   get_stock_level; resolve_name and resolve_requested_line match what the
+#   customer wrote against paper_supplies before any stock is read.
 
-"""Set up tools for your agents to use, these should be methods that combine the database functions above
- and apply criteria to them to ensure that the flow of the system is correct."""
+# Tools for quoting agent -- beaver/quoting/tools.py
+#   catalogue_price and price_line price from paper_supplies and apply the bulk
+#   discount bands; find_precedent and check_against_precedent wrap
+#   search_quote_history; record_quote files the quote on the audit trail.
 
+# Tools for ordering agent -- beaver/sales/tools.py and
+# beaver/replenishment/tools.py
+#   snapshot_financials wraps generate_financial_report; read_cash and
+#   cash_available wrap get_cash_balance; restock_arrival_date wraps
+#   get_supplier_delivery_date; record_sale and record_restock are the only
+#   callers of create_transaction, both of them through beaver/ledger.py.
 
-# Tools for inventory agent
+# Agents: beaver/{inventory,quoting,sales,replenishment}/agent.py, each with the
+# typed contract in its own models.py. The orchestration agent is
+# beaver/orchestrator.py, which calls the other four as its own tools
+# (consult_inventory, consult_quoting, place_order) and returns the
+# RequestResolution used below. beaver/audit.py records every step of every run.
 
-
-# Tools for quoting agent
-
-
-# Tools for ordering agent
-
-
-# Set up your agents and create an orchestration agent that will manage them.
-
-
-# Run your test scenarios by writing them here. Make sure to keep track of them.
+# The test scenarios are the twenty requests in quote_requests_sample.csv, run
+# below. Each run is kept: the results land in test_results/ and the full trail
+# of agent calls in the audit tables (beaver/audit.py).
 
 def run_test_scenarios():
     
@@ -631,13 +645,9 @@ def run_test_scenarios():
     current_cash = report["cash_balance"]
     current_inventory = report["inventory_value"]
 
-    ############
-    ############
-    ############
-    # INITIALIZE YOUR MULTI AGENT SYSTEM HERE
-    ############
-    ############
-    ############
+    # Initialize the multi-agent system. The agents themselves are constructed
+    # at import time in beaver/*/agent.py; what is left to do here is build the
+    # shared model and open the audit trail for this run.
 
     # Imported here rather than at module level: `beaver.starter` imports this
     # module by name, and a module-level import would close that cycle.
@@ -671,13 +681,10 @@ def run_test_scenarios():
         # Process request
         request_with_date = f"{row['request']} (Date of request: {request_date})"
 
-        ############
-        ############
-        ############
-        # USE YOUR MULTI AGENT SYSTEM TO HANDLE THE REQUEST
-        ############
-        ############
-        ############
+        # Hand the request to the multi-agent system: handle_request in
+        # beaver/orchestrator.py runs the orchestrator, which consults the
+        # inventory, quoting, sales and replenishment agents as needed and
+        # returns one resolution per request (beaver/outcome.py).
 
         resolution = asyncio.run(
             handle_request(

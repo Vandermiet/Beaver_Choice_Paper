@@ -57,7 +57,7 @@ from beaver.inventory.models import (
     InventoryResponse,
     ResolvedLine,
 )
-from beaver.llm import shared_model
+from beaver.llm import MissingCredentialsError, shared_model
 from beaver.outcome import derive_outcome, spoken_blockers, suspend
 from beaver.quoting.agent import quoting_agent
 from beaver.quoting.models import (
@@ -572,6 +572,14 @@ async def handle_request(
             )
             run_trail.write_suspension(flow)
             token = flow.resume_token
+    except MissingCredentialsError:
+        # Not a bug in this request, and not a business decision either: there
+        # is no credential, so every remaining request would fail the same way
+        # and the apology below would be told twenty times over a problem the
+        # operator can fix in one line. Answering it like a rejection is how a
+        # run with no API key once produced a full, well-formed, entirely
+        # meaningless results file. Let it out.
+        raise
     except Exception:
         # A crash is a bug, and a bug must not look like a business decision:
         # nothing here raises a blocker signal, and the trail already holds the

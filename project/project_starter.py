@@ -644,7 +644,14 @@ def run_test_scenarios():
     import asyncio
 
     from beaver.audit import bootstrap_audit
+    from beaver.llm import shared_model
     from beaver.orchestrator import handle_request
+
+    # Build the model before the loop rather than on the first request. With
+    # no API key every one of the twenty requests fails identically, and that
+    # is far cheaper to diagnose as one error up front than as a traceback
+    # twenty prints deep into the run.
+    shared_model()
 
     # After `init_database`, per the trail's own design: that call's
     # `if_exists="replace"` is scoped to its own four tables, so the seven

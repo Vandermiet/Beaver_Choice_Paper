@@ -31,7 +31,6 @@ and the reply asks the revision questions instead).
 | Workflow diagram (high level) | [`docs/workflow-high-level.md`](docs/workflow-high-level.md) |
 | Workflow diagram (full, with tools) | [`docs/workflow-diagram-detailed.md`](docs/workflow-diagram-detailed.md) |
 | Design notes / write-up | [`docs/reflection-report.md`](docs/reflection-report.md) |
-| Glossary of domain terms | [`CONTEXT.md`](CONTEXT.md) |
 | Test-run output | [`project/test_results/test_results.csv`](project/test_results/) |
 
 `docs/reflection-report.md` is the main write-up and is written to be read on its

@@ -9,3 +9,12 @@ __pycache__/
 *.pyc
 munder_difflin.db
 audit/
+
+# Not part of the rubric deliverables: internal research notes, working
+# glossary, superseded evaluation runs, and local backups of the starter.
+# The rubric asks for the diagram, the implementation, test_results.csv and
+# the reflection report; everything below is workshop residue.
+CONTEXT.md
+docs/research/
+project/test_results/test_results_1*.csv
+project/project_starter_original.py

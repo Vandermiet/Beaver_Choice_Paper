@@ -9,3 +9,22 @@ __pycache__/
 *.pyc
 munder_difflin.db
 audit/
+
+# Not part of the rubric deliverables: internal research notes, working
+# glossary, superseded evaluation runs, and local backups of the starter.
+# The rubric asks for the diagram, the implementation, test_results.csv and
+# the reflection report; everything below is workshop residue.
+CONTEXT.md
+docs/research/
+project/test_results/test_results_1*.csv
+project/project_starter_original.py
+
+# The test suite and its config. Kept on disk and in this repository's
+# history, but not part of the submitted deliverables -- the rubric asks for
+# the diagram, the implementation, test_results.csv and the reflection report.
+project/tests/
+project/pytest.ini
+
+# Udacity's own starter README, and the internal note on ticket-suffixed runs.
+project/README.md
+project/test_results/README.md

@@ -31,7 +31,6 @@ and the reply asks the revision questions instead).
 | Workflow diagram (high level) | [`docs/workflow-high-level.md`](docs/workflow-high-level.md) |
 | Workflow diagram (full, with tools) | [`docs/workflow-diagram-detailed.md`](docs/workflow-diagram-detailed.md) |
 | Design notes / write-up | [`docs/reflection-report.md`](docs/reflection-report.md) |
-| Glossary of domain terms | [`CONTEXT.md`](CONTEXT.md) |
 | Test-run output | [`project/test_results/test_results.csv`](project/test_results/) |
 
 `docs/reflection-report.md` is the main write-up and is written to be read on its
@@ -52,13 +51,6 @@ every run, so each run starts from identical state. The run calls the
 OpenAI-compatible Vocareum proxy (`gpt-4o-mini`), walks all twenty sample
 requests in date order, prints each outcome and the running cash and inventory
 position, and writes `project/test_results/test_results.csv`.
-
-To run the tests instead — they use a scripted model, so they need no API key and
-make no network calls:
-
-```bash
-cd project && python -m pytest
-```
 
 ## Disclosure: how this was built
 
@@ -89,8 +81,9 @@ rather than all at once, with a working end-to-end path available early.
 
 **`/implement` — to build each ticket.** Each ticket was implemented test-first
 (`/tdd`) at the agreed seams, with the full suite run at the end and the work
-reviewed before commit. The test files under `project/tests/` are the residue of
-that: one per agent, plus the audit, ledger and outcome layers.
+reviewed before commit. That left one test file per agent, plus the audit,
+ledger and outcome layers. They are kept in the repository's history rather than
+in this submission, which carries only what the project rubric asks for.
 
 The commit and pull-request history on
 [the repository](https://github.com/Vandermiet/Beaver_Choice_Paper) follows this

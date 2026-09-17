@@ -142,7 +142,7 @@
     <p class="eyebrow">Beaver's Choice &middot; project/beaver</p>
     <h1>The workflow diagram</h1>
     <p class="lede prose">Five agents, every tool each one owns, the starter helper each tool wraps, and the order the orchestrator drives them in. It describes the code in <code>project/beaver/</code>, not the design document that preceded it &mdash; where the two diverged, the drawing follows the code.</p>
-    <p class="prose" style="margin-bottom:0"><code>project/tests/test_diagram.py</code> parses the two blocks below and fails if a drawn tool does not exist, if a model-callable tool is missing or mis-drawn, or if one of the seven required helpers is not visibly wrapped. The drawing cannot quietly drift away from the system.</p>
+    <p class="prose" style="margin-bottom:0">A test parses the two blocks below and fails if a drawn tool does not exist, if a model-callable tool is missing or mis-drawn, or if one of the seven required helpers is not visibly wrapped. The drawing cannot quietly drift away from the system.</p>
   </header>
 
   <section>
@@ -436,7 +436,7 @@ sequenceDiagram
   </section>
 
   <footer>
-    Rendered from <span class="mono">docs/workflow-diagram-detailed.md</span>. The two diagrams are the same source <span class="mono">project/tests/test_diagram.py</span> parses.
+    Rendered from <span class="mono">docs/workflow-diagram-detailed.md</span>. The two diagrams are the same source that test parses.
   </footer>
 </div>
 

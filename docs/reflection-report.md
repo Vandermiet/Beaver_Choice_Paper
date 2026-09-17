@@ -141,8 +141,8 @@ trail is not acting on a system of record, because no decision anywhere depends
 on what the trail says. The trail exists so that "why was this refused?" and
 "why was this priced so?" are queries rather than archaeology over transcripts —
 and the evaluation section below is the first consumer of that property. This
-report's own numbers are trail queries, and the suite re-runs them
-(`project/tests/test_report.py`).
+report's own numbers are trail queries, and every one of them is re-run against
+the committed trail by the test suite.
 
 `transaction_links` is the join that makes it work: every runtime row in
 `transactions` is tied to the request and the step that wrote it, so money can
@@ -520,10 +520,12 @@ Each figure in the evaluation section is named below with the SQL that produced
 it. `init_database` rewrites `munder_difflin.db` on every run, so the repo does
 not carry it; the run's audit trail travels instead as
 `project/test_results/audit_20260916T111405Z.sql`, a dump of the seven audit
-tables and the transactions they link to. `project/tests/test_report.py`
-rebuilds that dump in memory, executes every query below against it, and asserts
-each one answers the number stated — including the figures restated in the prose
-tables above. The prose cannot drift away from the trail.
+tables and the transactions they link to. A test rebuilds that dump in memory,
+executes every query below against it, and asserts each one answers the number
+stated — including the figures restated in the prose tables above. The prose
+cannot drift away from the trail. That test is kept in the repository's history
+rather than in this submission, but the dump itself is here, so every query
+below can be re-run against it directly.
 
 | figure | value | what it counts |
 |---|---|---|

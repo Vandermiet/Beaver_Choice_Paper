@@ -6,11 +6,13 @@ drives them in.
 
 It describes the code in `project/beaver/`, not the design document that
 preceded it. Where the two diverged, this diagram follows the code and the
-divergences are listed at the end. `project/tests/test_diagram.py` parses the
+divergences are listed at the end. This diagram is not maintained by hand. A test parses the
 first two blocks below and fails if a tool drawn here does not exist, if a tool
 the models can call is missing, if a model-callable tool is drawn as though it
 were not, or if one of the seven required helpers is not visibly wrapped — so
-the drawing cannot quietly drift away from the system.
+the drawing cannot quietly drift away from the system. That test is kept in the
+repository's history rather than in this submission; the diagram below is the
+version it last passed against.
 
 For the shape alone — five agents and the flows between them —
 [`workflow-high-level.md`](workflow-high-level.md) draws the same system without
